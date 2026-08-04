@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/">&larr; retour à la liste</a></p>
+<h2>{{ article.titre }}</h2>
+<p>
+  <strong>Domaine :</strong> {{ article.domaine_source or "—" }}
+  · <strong>Publié le :</strong> {{ article.date_publication.strftime("%Y-%m-%d") }}
+  · <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer">source originale</a>
+</p>
+
+<h3>Score composite{% if score %} : {{ "%.1f"|format(score.score_final) if score.score_final is not none else "non évaluable" }}{% endif %}</h3>
+{% if score %}
+<table>
+  <thead><tr><th>Signal</th><th>Valeur</th><th>Poids</th><th>Justification</th></tr></thead>
+  <tbody>
+    {% for signal, resultat in score.sous_scores.items() %}
+    <tr>
+      <td>{{ signal }}</td>
+      {% if resultat.valeur is none %}
+      <td class="exclu">non applicable</td>
+      {% else %}
+      <td>{{ "%.1f"|format(resultat.valeur) }}</td>
+      {% endif %}
+      <td>{{ score.poids.get(signal, "—") }}</td>
+      <td>{{ resultat.raison }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>Cet article n'a pas encore été évalué.</p>
+{% endif %}
+
+<h3>Mise en contexte</h3>
+{% if mise_en_contexte %}
+<p>{{ mise_en_contexte.explication }}</p>
+{% if mise_en_contexte.sources_utilisees %}
+<ul>
+  {% for source in mise_en_contexte.sources_utilisees %}
+  <li>{{ source }}</li>
+  {% endfor %}
+</ul>
+{% endif %}
+<p><em>Confiance : {{ mise_en_contexte.niveau_confiance or "non précisée" }}</em></p>
+{% else %}
+<p>Aucune mise en contexte n'a encore été générée pour cet article.</p>
+{% endif %}
+{% endblock %}

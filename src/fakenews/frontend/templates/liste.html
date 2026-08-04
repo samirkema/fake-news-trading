@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+<form class="filtres" method="get">
+  <label>Score minimum
+    <input type="number" name="score_min" value="{{ score_min if score_min is not none else '' }}" min="0" max="100" step="1">
+  </label>
+  <label>Depuis le
+    <input type="date" name="date_min" value="{{ date_min or '' }}">
+  </label>
+  <label>Jusqu'au
+    <input type="date" name="date_max" value="{{ date_max or '' }}">
+  </label>
+  <label>
+    <input type="checkbox" name="tous" value="1" {% if tous %}checked{% endif %}>
+    Tous les articles (y compris fiables)
+  </label>
+  <button type="submit">Filtrer</button>
+</form>
+
+{% if resultats %}
+<table>
+  <thead><tr><th>Score</th><th>Titre</th><th>Domaine</th><th>Date</th></tr></thead>
+  <tbody>
+    {% for article, score in resultats %}
+    <tr>
+      <td class="score">{{ "%.1f"|format(score.score_final) }}</td>
+      <td><a href="/articles/{{ article.id }}">{{ article.titre }}</a></td>
+      <td>{{ article.domaine_source or "—" }}</td>
+      <td>{{ article.date_publication.strftime("%Y-%m-%d") }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>Aucun article ne correspond à ces critères pour l'instant.</p>
+{% endif %}
+
+{% if url_page_precedente or url_page_suivante %}
+<p>
+  {% if url_page_precedente %}<a href="{{ url_page_precedente }}">&larr; page précédente</a>{% endif %}
+  {% if url_page_precedente and url_page_suivante %} · {% endif %}
+  {% if url_page_suivante %}<a href="{{ url_page_suivante }}">page suivante &rarr;</a>{% endif %}
+</p>
+{% endif %}
+{% endblock %}
