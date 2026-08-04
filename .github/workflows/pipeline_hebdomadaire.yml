@@ -30,14 +30,18 @@ jobs:
           REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
           REDDIT_USER_AGENT: ${{ secrets.REDDIT_USER_AGENT }}
 
-      # Évaluateur (US-08 + US-01 réputation — seuls signaux implémentés à ce stade,
-      # cf. doc/plan_implementation.md "État d'avancement").
+      # Évaluateur (US-08, US-01 réputation, US-05 style, US-07 LLM bootstrap — cf.
+      # doc/plan_implementation.md "État d'avancement" pour les signaux restants).
       - run: python -m fakenews.evaluateur.run_evaluateur
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
-      # Contextualiseur : sélectionne et journalise les articles à traiter (US-01
-      # contextualiseur). Ne génère rien : la génération LLM (US-02) n'est pas encore
-      # branchée (fournisseur non choisi, hors périmètre documenté).
+      # Contextualiseur : sélectionne et génère la mise en contexte (US-01, US-02,
+      # US-03, US-04). Dégrade proprement (sélection journalisée, rien généré) si
+      # ANTHROPIC_API_KEY est absente.
       - run: python -m fakenews.contextualiseur.run_contextualiseur
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
       # Le frontend n'est pas dans ce job : consulté à la demande sur Vercel, qui lit
       # directement Supabase (cf. doc/architecture.md, doc/plan_implementation.md Phase 5).

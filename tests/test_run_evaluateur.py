@@ -6,10 +6,11 @@ from fakenews.evaluateur.run_evaluateur import evaluer_articles_non_scores
 from fakenews.models import Article, Score
 
 
-def _inserer_article(session, domaine_source, suffixe):
+def _inserer_article(session, domaine_source, suffixe, auteur="Auteur Test", contenu='Un article avec "une citation valable ici".'):
     article = Article(
         titre=f"Titre {suffixe}",
-        contenu="Contenu",
+        contenu=contenu,
+        auteur=auteur,
         domaine_source=domaine_source,
         date_publication=datetime.now(timezone.utc),
         url=f"https://test-run-evaluateur.invalid/{suffixe}",
@@ -28,36 +29,60 @@ def _inserer_article(session, domaine_source, suffixe):
 # par conception (même logique que collecter_rss/collecter_reddit). Les assertions
 # ci-dessous vérifient donc le score de l'article de CE test spécifiquement, jamais
 # un compte total qui inclurait les vraies données.
+#
+# Aucune ANTHROPIC_API_KEY n'est configurée dans cet environnement de test : le
+# client LLM ne peut pas être créé, donc US-07 (llm_bootstrap) est absent de
+# sous_scores dans tous les tests ci-dessous (comportement dégradé attendu, cf.
+# run_evaluateur.py) — seuls US-01 (réputation) et US-05 (style) sont exercés.
 
 
-def test_article_fiable_recoit_un_score_bas(db_session):
+def test_article_fiable_et_style_propre_recoit_un_score_bas(db_session):
+    # auteur + citation + pas de vocabulaire chargé -> style à sa valeur plancher
+    # (10.0), comme réputation fiable (5.0) : les deux signaux tirent vers le bas.
     article = _inserer_article(db_session, "bbc.com", "fiable")
     evaluer_articles_non_scores(db_session)
     db_session.flush()
 
     score = db_session.execute(select(Score).where(Score.article_id == article.id)).scalar_one()
     assert score.non_evaluable is False
-    assert score.score_final == 5.0
-    assert score.sous_scores == {
-        "reputation": {
-            "valeur": 5.0,
-            "raison": "domaine « bbc.com » sur la liste de référence des sources fiables",
-            "preuve_id": "reputation",
-        }
-    }
-    assert score.poids == {"reputation": 1.0}
+    assert set(score.sous_scores) == {"reputation", "style"}
+    assert score.sous_scores["reputation"]["valeur"] == 5.0
+    assert score.sous_scores["style"]["valeur"] == 10.0
+    # (1.0*5.0 + 0.5*10.0) / 1.5 = 6.67 — colonne NUMERIC, comparer en float
+    # (Decimal('6.67') == 6.67 est False : représentation binaire non exacte du float).
+    assert float(score.score_final) == 6.67
+    assert score.poids == {"reputation": 1.0, "style": 0.5}
 
 
-def test_article_domaine_inconnu_est_non_evaluable(db_session):
-    # Seul signal implémenté = réputation ; si elle est exclue (domaine inconnu),
-    # tous les signaux disponibles sont exclus -> non_évaluable (US-08 évaluateur).
+def test_article_domaine_inconnu_reputation_exclue_mais_style_contribue(db_session):
+    # Réputation exclue (domaine inconnu, cf. US-01 évaluateur) mais le style ne
+    # s'exclut jamais (heuristique toujours tranchée) : l'article reste évaluable,
+    # sur la seule base du style. non_évaluable ne peut plus se produire avec ces
+    # deux signaux à la fois — cf. test_tous_les_signaux_exclus_donne_non_evaluable
+    # (test_score.py) pour le cas non_évaluable testé au niveau de l'agrégateur seul.
     article = _inserer_article(db_session, "un-domaine-jamais-vu.example", "inconnu")
     evaluer_articles_non_scores(db_session)
     db_session.flush()
 
     score = db_session.execute(select(Score).where(Score.article_id == article.id)).scalar_one()
-    assert score.non_evaluable is True
-    assert score.score_final is None
+    assert score.sous_scores["reputation"]["valeur"] is None
+    assert score.non_evaluable is False
+    assert float(score.score_final) == 10.0  # style seul contribue, à sa valeur plancher
+
+
+def test_article_style_douteux_augmente_le_score(db_session):
+    article = _inserer_article(
+        db_session,
+        "un-domaine-jamais-vu.example",
+        "style-douteux",
+        auteur=None,
+        contenu="Aucune citation. Scandale et catastrophe.",
+    )
+    evaluer_articles_non_scores(db_session)
+    db_session.flush()
+
+    score = db_session.execute(select(Score).where(Score.article_id == article.id)).scalar_one()
+    assert score.sous_scores["style"]["valeur"] > 10.0
 
 
 def test_article_deja_score_n_est_pas_re_evalue(db_session):

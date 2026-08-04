@@ -104,7 +104,7 @@ Chaque signal (US-01 à US-07) exprime sa `valeur` sur cette même échelle 0-10
 - La réponse est parsée en un format structuré (score + justification) et associée à l'article.
 - Chaque appel LLM est journalisé (article, score, justification, date) pour constituer le futur dataset d'entraînement.
 - Ce signal est clairement identifié comme provisoire/bootstrap dans la sortie, distinct des signaux 1 à 6.
-- Le nombre d'appels LLM par run hebdomadaire est plafonné (valeur configurable), avec priorisation par cluster d'événement (le plus corroboré/le plus viral d'abord) si le volume collecté dépasse le plafond — condition nécessaire pour que le budget (cf. `fiche-projet-fake-news-trading.md`) reste prévisible malgré une collecte de volume non plafonné (US-01 scraper).
+- Le nombre d'appels LLM par run hebdomadaire est plafonné (valeur configurable, `LLM_PLAFOND_EVALUATEUR`), avec priorisation par cluster d'événement (le plus corroboré/le plus viral d'abord) si le volume collecté dépasse le plafond — condition nécessaire pour que le budget (cf. `fiche-projet-fake-news-trading.md`) reste prévisible malgré une collecte de volume non plafonné (US-01 scraper). La priorisation par cluster n'est pas encore possible (dépend du clustering de US-02 évaluateur, non implémenté) : en attendant, les articles sont traités dans l'ordre rencontré jusqu'au plafond — simplification assumée, pas un oubli.
 
 ---
 

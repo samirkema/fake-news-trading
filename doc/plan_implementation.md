@@ -17,7 +17,7 @@ Ce plan séquence le développement des 4 blocs définis dans `architecture.md`,
 | SEC EDGAR | requêtes HTTP directes (full-text search, gratuit) |
 | NER (tickers/entreprises) | `spaCy` |
 | Embeddings (clustering US-02 évaluateur) | `sentence-transformers` (modèle léger type `all-MiniLM-L6-v2`, local, gratuit) |
-| LLM (US-07 évaluateur, contextualiseur) | SDK du fournisseur à choisir (décision non prise, cf. hors périmètre `userstories_contextualiseur.md`) |
+| LLM (US-07 évaluateur, contextualiseur) | **Claude (Anthropic)**, SDK `anthropic` — sortie structurée forcée via tool use plutôt que du parsing de texte libre (cf. `fakenews/llm.py`) |
 | Stockage partagé | Supabase (PostgreSQL managé), via `SQLAlchemy` + driver Postgres (`psycopg2`/`asyncpg`) ou le client `supabase-py` |
 | Frontend | FastAPI + Jinja2 (pas de SPA, cf. `architecture.md`), déployé sur **Vercel** |
 | Code source / CI | **GitHub** (repo + déclencheur des workflows planifiés) |
@@ -88,7 +88,7 @@ Séquentiel, chaque étape dépendant de la précédente :
 
 Une fois les 4 blocs individuellement fonctionnels : orchestrer scraper → évaluateur → contextualiseur en un unique workflow GitHub Actions planifié hebdomadairement (le frontend reste consulté à la demande sur Vercel, pas dans cette tâche). Correspond au point "automatiser le rapport hebdomadaire via GitHub Actions" de `fiche-projet-fake-news-trading.md`.
 
-**Réalisé avec les blocs disponibles aujourd'hui**, pas d'attente de leur complétude totale : `.github/workflows/pipeline_hebdomadaire.yml` enchaîne scraper (US-06) → évaluateur (`run_evaluateur.py`, réputation seule) → contextualiseur (`run_contextualiseur.py`, sélection + journalisation uniquement, sans génération LLM — cf. US-02 hors périmètre). Remplace l'ancien workflow `collecte_hebdomadaire.yml` (scraper seul), pour éviter deux jobs planifiés qui se chevaucheraient.
+**Réalisé avec les blocs disponibles aujourd'hui**, pas d'attente de leur complétude totale : `.github/workflows/pipeline_hebdomadaire.yml` enchaîne scraper (US-06) → évaluateur (`run_evaluateur.py`) → contextualiseur (`run_contextualiseur.py`, génération réelle branchée sur Claude). Remplace l'ancien workflow `collecte_hebdomadaire.yml` (scraper seul), pour éviter deux jobs planifiés qui se chevaucheraient.
 
 ---
 
@@ -103,11 +103,11 @@ Une fois les 4 blocs individuellement fonctionnels : orchestrer scraper → éva
 
 - **Phase 0** : terminée.
 - **Phase 1 (scraper)** : US-01 (RSS), US-02 (Reddit), US-04 (normalisation), US-05 (déduplication), US-06 (GitHub Actions) terminées. US-03 (GDELT) non implémentée, décision assumée (cf. `doc/userstories_scraper.md` US-03 et les audits de suivi) — l'évaluateur a un repli par similarité prévu pour ce cas.
-- **Phase 2 (évaluateur)** : US-08 (squelette du score composite) et US-01 (réputation) terminées. US-02 à US-07 restent à faire, dans l'ordre déjà séquencé ci-dessus.
-- **Phase 3 (contextualiseur)** : US-01 (déclenchement), US-03 (persistance) et US-04 (avertissement) terminées. US-02 : seule la validation des `preuve_id` (post-traitement, sans LLM) est faite — la génération réelle par LLM reste bloquée sur le choix du fournisseur (hors périmètre, décision non prise) et sur des signaux évaluateur plus riches (fact-checking, source primaire) à citer.
-- **Phase 4 (frontend)** : US-01 (liste filtrable, paginée), US-02 (détail scores/justifications), US-03 (mise en contexte ou message explicite) et US-04 (lecture seule, auth conditionnelle, déploiement Vercel) terminées. En pratique, les scores affichés reposent aujourd'hui uniquement sur le signal réputation (Phase 2 partielle) — peu de matière tant que US-02 à 07 évaluateur ne sont pas faits.
-- **Phase 5 (automatisation)** : orchestration hebdomadaire scraper → évaluateur → contextualiseur en place (`pipeline_hebdomadaire.yml`). Le contextualiseur n'y fait que sélectionner et journaliser (pas de génération, bloqué sur le choix du fournisseur LLM comme en Phase 3).
+- **Phase 2 (évaluateur)** : US-08 (squelette du score composite), US-01 (réputation), US-05 (style), US-07 (LLM bootstrap, Claude) terminées. US-02 (corroboration), US-03 (fact-checking), US-04 (source primaire), US-06 (décalage viral) restent à faire — respectivement bloquées sur du clustering (embeddings/GDELT), une clé API Google Fact Check à obtenir, du NER (spaCy) + SEC EDGAR, et le clustering de US-02.
+- **Phase 3 (contextualiseur)** : US-01 (déclenchement), US-02 (génération réelle, Claude, ancrée sur les signaux évaluateur disponibles et validée par `validation.py`), US-03 (persistance) et US-04 (avertissement) terminées.
+- **Phase 4 (frontend)** : US-01 (liste filtrable, paginée), US-02 (détail scores/justifications), US-03 (mise en contexte ou message explicite) et US-04 (lecture seule, auth conditionnelle, déploiement Vercel) terminées.
+- **Phase 5 (automatisation)** : orchestration hebdomadaire scraper → évaluateur → contextualiseur en place (`pipeline_hebdomadaire.yml`), génération de mise en contexte réellement branchée.
 
-**Prochaine étape concrète** : compléter Phase 2 (US-05 style, puis US-07 LLM bootstrap — nécessite aussi de choisir un fournisseur LLM) pour donner à la Phase 3 et au Phase 4 de la matière plus riche, avant de brancher la génération réelle de US-02 contextualiseur.
+**Prochaine étape concrète** : les 4 signaux évaluateur restants (US-02, US-03, US-04, US-06) — US-03 (fact-checking) et US-04 (source primaire) sont les plus abordables (API gratuites, pas de clustering nécessaire) ; US-02/US-06 nécessitent d'abord une brique de clustering (embeddings) commune aux deux. Plus les scores s'enrichissent, plus la génération de mise en contexte (déjà branchée) aura de matière factuelle à citer au-delà de réputation/style.
 
 **Note pour la prochaine mise à jour de cette section** : elle s'est déjà désynchronisée une fois, dans le tour même qui a livré la Phase 4 (cf. audit de suivi `audit/audit-phase4-frontend.md`) — la mettre à jour fait partie de "finir" une phase, pas une étape séparée qu'on peut oublier.

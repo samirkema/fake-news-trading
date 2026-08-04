@@ -60,4 +60,4 @@ Périmètre : la génération d'une explication factuelle pour les articles iden
 ## Hors périmètre (pour rappel)
 
 - La vérification factuelle primaire (interrogation des fact-checkers, recherche en source primaire) est déjà faite par l'évaluateur (US-03, US-04 évaluateur) — le contextualiseur ne la refait pas, il la réutilise.
-- Le fine-tuning ou le choix du LLM utilisé pour la génération n'est pas couvert ici.
+- Le fine-tuning d'un modèle maison pour la génération n'est pas couvert ici. Le fournisseur LLM est Claude (Anthropic, cf. `fakenews/llm.py`) — décision prise, plus hors périmètre.
