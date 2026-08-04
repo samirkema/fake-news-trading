@@ -55,8 +55,22 @@ def collecter_reddit(session: Session, client: "praw.Reddit | None" = None) -> d
     journalisé et n'interrompt pas la collecte des autres, et un post individuel qui
     ferait échouer sa normalisation/persistance est ignoré plutôt que d'interrompre le
     reste du subreddit ou des subreddits suivants (cf. doc/architecture.md, dégrader
-    jamais bloquer — appliqué au grain du post, pas seulement du subreddit)."""
-    client = client or creer_client()
+    jamais bloquer — appliqué au grain du post, pas seulement du subreddit).
+
+    La création du client (identifiants absents/invalides) est protégée au même titre :
+    Reddit tout entier est alors marqué indisponible plutôt que de faire planter
+    l'appelant (cf. audit de suivi — un run_scraper.py qui plante ici empêchait
+    évaluateur/contextualiseur de s'exécuter dans le pipeline hebdomadaire)."""
+    if client is None:
+        try:
+            client = creer_client()
+        except Exception as exc:
+            logger.warning("Reddit indisponible : échec de création du client (%s)", exc)
+            return {
+                nom: {"statut": "indisponible", "ajoutes": 0, "mis_a_jour": 0, "ignores": 0}
+                for nom in SUBREDDITS
+            }
+
     bilan = {}
     for nom_subreddit in SUBREDDITS:
         try:

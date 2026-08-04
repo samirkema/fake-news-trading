@@ -11,9 +11,6 @@ jobs:
     env:
       PYTHONPATH: src
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
-      REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
-      REDDIT_USER_AGENT: ${{ secrets.REDDIT_USER_AGENT }}
     steps:
       - uses: actions/checkout@v4
 
@@ -23,8 +20,15 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      # Scraper (US-06 scraper) : RSS + Reddit.
+      # Scraper (US-06 scraper) : RSS + Reddit. Identifiants Reddit scopés à ce seul
+      # step (cf. audit de suivi) — évaluateur et contextualiseur n'en ont pas besoin.
+      # Si absents/invalides, la collecte Reddit dégrade proprement (cf. reddit.py) :
+      # ne bloque plus les steps suivants.
       - run: python -m fakenews.scraper.run_scraper
+        env:
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          REDDIT_USER_AGENT: ${{ secrets.REDDIT_USER_AGENT }}
 
       # Évaluateur (US-08 + US-01 réputation — seuls signaux implémentés à ce stade,
       # cf. doc/plan_implementation.md "État d'avancement").

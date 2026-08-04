@@ -58,3 +58,25 @@ def test_un_post_malforme_n_interrompt_pas_le_reste_du_subreddit(db_session, mon
     # un taux d'échec élevé sur r/a ne doit pas être noyé au niveau INFO.
     avertissements = [r.message for r in caplog.records if r.levelname == "WARNING"]
     assert any("r/a" in m and "1 post" in m for m in avertissements)
+
+
+def test_client_impossible_a_creer_degrade_sans_planter(db_session, monkeypatch, caplog):
+    # Reproduit et corrige le bug High de l'audit de suivi (Phase 5) : sans identifiants
+    # Reddit configurés, creer_client() lève KeyError — auparavant hors de toute
+    # protection, ça faisait planter tout run_scraper.py et empêchait évaluateur/
+    # contextualiseur de s'exécuter dans le pipeline hebdomadaire.
+    monkeypatch.setattr("fakenews.scraper.reddit.SUBREDDITS", ["a", "b"])
+
+    def _creer_client_qui_echoue():
+        raise KeyError("REDDIT_CLIENT_ID")
+
+    monkeypatch.setattr("fakenews.scraper.reddit.creer_client", _creer_client_qui_echoue)
+
+    with caplog.at_level("WARNING"):
+        bilan = collecter_reddit(db_session)  # pas de client injecté -> passe par creer_client()
+
+    assert bilan == {
+        "a": {"statut": "indisponible", "ajoutes": 0, "mis_a_jour": 0, "ignores": 0},
+        "b": {"statut": "indisponible", "ajoutes": 0, "mis_a_jour": 0, "ignores": 0},
+    }
+    assert any("Reddit indisponible" in r.message for r in caplog.records if r.levelname == "WARNING")
