@@ -107,12 +107,38 @@ def _url_liste(score_min, date_min, date_max, tous, page) -> Optional[str]:
     return f"/?{urlencode(params)}" if params else "/"
 
 
+def _parser_score_min(brut: Optional[str]) -> Optional[float]:
+    """Le formulaire HTML soumet une chaîne vide (pas un paramètre absent) pour un
+    champ numérique laissé vide — FastAPI/Pydantic ne convertit pas "" en None pour un
+    `Optional[float]`, ce qui faisait échouer TOUT filtrage dès qu'un champ restait
+    vide (422 sur un simple clic de "Filtrer"), cf. signalement utilisateur."""
+    if not brut:
+        return None
+    try:
+        valeur = float(brut)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="score_min invalide")
+    if not (0 <= valeur <= 100):
+        raise HTTPException(status_code=422, detail="score_min doit être entre 0 et 100")
+    return valeur
+
+
+def _parser_date(brut: Optional[str], nom: str) -> Optional[date]:
+    """Même raison que _parser_score_min ci-dessus, pour les champs date."""
+    if not brut:
+        return None
+    try:
+        return date.fromisoformat(brut)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"{nom} invalide")
+
+
 @app.get("/", response_class=HTMLResponse)
 def liste_articles(
     request: Request,
-    score_min: Optional[float] = Query(None, ge=0, le=100),
-    date_min: Optional[date] = Query(None),
-    date_max: Optional[date] = Query(None),
+    score_min_brut: Optional[str] = Query(None, alias="score_min"),
+    date_min_brut: Optional[str] = Query(None, alias="date_min"),
+    date_max_brut: Optional[str] = Query(None, alias="date_max"),
     tous: bool = Query(False),
     page: int = Query(1, ge=1),
     session: Session = Depends(get_session),
@@ -122,9 +148,13 @@ def liste_articles(
     décroissant, paginée. Par défaut seuls les articles au-dessus du seuil
     apparaissent ; `tous=1` lève ce filtre par défaut (mode "tous les articles",
     cf. US-01 frontend). Un article `non_évaluable` n'apparaît jamais (cf. US-08
-    évaluateur). `date_min`/`date_max` typés `date` : une valeur malformée est
-    rejetée par FastAPI (422) avant d'atteindre la requête SQL, plutôt que de
-    planter la route (cf. audit de suivi)."""
+    évaluateur). `score_min`/`date_min`/`date_max` reçus en texte brut puis parsés
+    manuellement : une valeur vide (champ de formulaire non rempli) devient
+    l'absence de filtre, une valeur malformée non vide reste rejetée en 422 (cf.
+    audit de suivi)."""
+    score_min = _parser_score_min(score_min_brut)
+    date_min = _parser_date(date_min_brut, "date_min")
+    date_max = _parser_date(date_max_brut, "date_max")
     seuil_effectif = score_min if score_min is not None else (None if tous else SEUIL_PAR_DEFAUT)
 
     stmt = select(Article, Score).join(Score, Score.article_id == Article.id).where(Score.non_evaluable.is_(False))

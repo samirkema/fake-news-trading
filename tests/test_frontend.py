@@ -201,6 +201,17 @@ def test_date_min_valide_filtre_correctement(client, db_session):
     assert "Titre date-ok" in reponse.text
 
 
+def test_filtres_vides_ne_bloquent_pas_la_liste(client, db_session):
+    # Reproduit le bug signalé : le formulaire HTML soumet une chaîne vide (pas un
+    # paramètre absent) pour un champ laissé vide — FastAPI/Pydantic ne convertit pas
+    # "" en None pour un Optional[float]/Optional[date], donc tout clic sur
+    # "Filtrer" sans remplir tous les champs plantait en 422.
+    _inserer_article_avec_score(db_session, "filtres-vides", 80.0)
+    reponse = client.get("/?score_min=&date_min=&date_max=&tous=1")
+    assert reponse.status_code == 200
+    assert "Titre filtres-vides" in reponse.text
+
+
 def test_pagination_limite_le_nombre_de_resultats_et_expose_page_suivante(client, db_session):
     for i in range(55):
         _inserer_article_avec_score(db_session, f"page-{i}", 80.0)
