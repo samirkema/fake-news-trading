@@ -1,0 +1,22 @@
+name: Backfill signal fact-checking (ponctuel)
+
+"on":
+  workflow_dispatch: {} # correctif à la demande uniquement, jamais programmé (cf. backfill_fact_checking.py)
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: src
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      GOOGLE_FACT_CHECK_API_KEY: ${{ secrets.GOOGLE_FACT_CHECK_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - run: python -m fakenews.evaluateur.backfill_fact_checking
