@@ -3,17 +3,17 @@ doc/architecture.md — FastAPI + Jinja2, déployé sur Vercel, le local ne sert
 dev/test). Ce module ne fait strictement que lire le stockage partagé — aucune route
 d'écriture."""
 
+import hashlib
+import hmac
 import os
-import secrets
 import uuid
 from datetime import date
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlencode
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -27,18 +27,62 @@ app = FastAPI(title="Fake News — Détection")
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 ARTICLES_PAR_PAGE = 50
+NOM_COOKIE = "session"
 
-_securite = HTTPBasic(auto_error=False)
+
+def _jeton_session(mot_de_passe: str) -> str:
+    """Jeton dérivé du mot de passe (HMAC), pas le mot de passe lui-même dans le
+    cookie. Quiconque connaît le mot de passe peut recalculer ce jeton — même
+    niveau de sécurité que l'authentification HTTP Basic précédente, juste porté
+    par un cookie plutôt que par un en-tête envoyé à chaque requête."""
+    return hmac.new(mot_de_passe.encode(), b"fakenews-session", hashlib.sha256).hexdigest()
 
 
-def verifier_acces(credentials: Optional[HTTPBasicCredentials] = Depends(_securite)) -> None:
-    """US-04 frontend : authentification minimale en version hébergée uniquement.
-    Le mode local (FRONTEND_PASSWORD non définie) n'a pas besoin de l'appliquer."""
+class AccesRefuse(Exception):
+    pass
+
+
+@app.exception_handler(AccesRefuse)
+def _rediriger_vers_connexion(request: Request, exc: AccesRefuse):
+    return RedirectResponse(url="/login", status_code=303)
+
+
+def verifier_acces(request: Request) -> None:
+    """US-04 frontend : authentification minimale en version hébergée uniquement
+    (un seul mot de passe, pas de nom d'utilisateur — cf. /login). Le mode local
+    (FRONTEND_PASSWORD non définie) n'a pas besoin de l'appliquer."""
     mot_de_passe = os.environ.get("FRONTEND_PASSWORD")
     if mot_de_passe is None:
         return
-    if credentials is None or not secrets.compare_digest(credentials.password, mot_de_passe):
-        raise HTTPException(status_code=401, detail="Accès refusé", headers={"WWW-Authenticate": "Basic"})
+    jeton_recu = request.cookies.get(NOM_COOKIE)
+    if jeton_recu is None or not hmac.compare_digest(jeton_recu, _jeton_session(mot_de_passe)):
+        raise AccesRefuse()
+
+
+@app.get("/login", response_class=HTMLResponse)
+def page_connexion(request: Request):
+    return templates.TemplateResponse(request, "login.html", {"erreur": None})
+
+
+@app.post("/login")
+def connexion(request: Request, mot_de_passe: str = Form(...)):
+    attendu = os.environ.get("FRONTEND_PASSWORD")
+    if attendu is None or not hmac.compare_digest(mot_de_passe, attendu):
+        return templates.TemplateResponse(
+            request, "login.html", {"erreur": "Mot de passe incorrect."}, status_code=401
+        )
+    reponse = RedirectResponse(url="/", status_code=303)
+    reponse.set_cookie(
+        NOM_COOKIE, _jeton_session(attendu), httponly=True, secure=True, samesite="lax", max_age=60 * 60 * 24 * 30
+    )
+    return reponse
+
+
+@app.post("/logout")
+def deconnexion():
+    reponse = RedirectResponse(url="/login", status_code=303)
+    reponse.delete_cookie(NOM_COOKIE)
+    return reponse
 
 
 def get_session():

@@ -30,10 +30,15 @@ def _inserer_article(session, domaine_source, suffixe, auteur="Auteur Test", con
 # ci-dessous vérifient donc le score de l'article de CE test spécifiquement, jamais
 # un compte total qui inclurait les vraies données.
 #
-# Aucune ANTHROPIC_API_KEY n'est configurée dans cet environnement de test : le
-# client LLM ne peut pas être créé, donc US-07 (llm_bootstrap) est absent de
-# sous_scores dans tous les tests ci-dessous (comportement dégradé attendu, cf.
-# run_evaluateur.py) — seuls US-01 (réputation) et US-05 (style) sont exercés.
+# Aucune ANTHROPIC_API_KEY / GOOGLE_FACT_CHECK_API_KEY n'est configurée dans cet
+# environnement de test : US-07 (llm_bootstrap) est absent de sous_scores (client LLM
+# non créé, cf. run_evaluateur.py) et US-03 (fact_checking) a systématiquement
+# valeur=None (clé absente, cf. fact_checking.py) — comportements dégradés attendus.
+# US-04 (source_primaire) est toujours présent dans sous_scores mais reste à
+# valeur=None tant que les articles de test ne citent aucune entreprise de
+# ENTREPRISES_CONNUES (cf. source_primaire.py) : aucun appel réseau réel n'est donc
+# déclenché par ces tests. Seuls US-01 (réputation) et US-05 (style) contribuent
+# effectivement au score dans les tests ci-dessous.
 
 
 def test_article_fiable_et_style_propre_recoit_un_score_bas(db_session):
@@ -45,13 +50,16 @@ def test_article_fiable_et_style_propre_recoit_un_score_bas(db_session):
 
     score = db_session.execute(select(Score).where(Score.article_id == article.id)).scalar_one()
     assert score.non_evaluable is False
-    assert set(score.sous_scores) == {"reputation", "style"}
+    assert set(score.sous_scores) == {"reputation", "style", "fact_checking", "source_primaire"}
     assert score.sous_scores["reputation"]["valeur"] == 5.0
     assert score.sous_scores["style"]["valeur"] == 10.0
-    # (1.0*5.0 + 0.5*10.0) / 1.5 = 6.67 — colonne NUMERIC, comparer en float
-    # (Decimal('6.67') == 6.67 est False : représentation binaire non exacte du float).
+    assert score.sous_scores["fact_checking"]["valeur"] is None
+    assert score.sous_scores["source_primaire"]["valeur"] is None
+    # fact_checking et source_primaire exclus (valeur=None) : seuls reputation/style
+    # contribuent. (1.0*5.0 + 0.5*10.0) / 1.5 = 6.67 — colonne NUMERIC, comparer en
+    # float (Decimal('6.67') == 6.67 est False : représentation binaire non exacte).
     assert float(score.score_final) == 6.67
-    assert score.poids == {"reputation": 1.0, "style": 0.5}
+    assert score.poids == {"reputation": 1.0, "style": 0.5, "fact_checking": 1.5, "source_primaire": 1.5}
 
 
 def test_article_domaine_inconnu_reputation_exclue_mais_style_contribue(db_session):

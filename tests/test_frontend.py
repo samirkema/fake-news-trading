@@ -128,17 +128,51 @@ def test_avertissement_visible_sur_la_liste_et_le_detail(client, db_session):
     assert extrait in client.get(f"/articles/{article.id}").text
 
 
-def test_authentification_requise_si_mot_de_passe_configure(client, monkeypatch):
+def test_sans_cookie_redirige_vers_login_si_mot_de_passe_configure(client, monkeypatch):
+    monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
+    reponse = client.get("/", follow_redirects=False)
+    assert reponse.status_code == 303
+    assert reponse.headers["location"] == "/login"
+
+
+def test_page_login_n_a_pas_de_champ_utilisateur(client, monkeypatch):
+    monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
+    reponse = client.get("/login")
+    assert reponse.status_code == 200
+    assert 'type="password"' in reponse.text
+    assert 'type="text"' not in reponse.text
+    assert "username" not in reponse.text.lower()
+
+
+def test_login_avec_bon_mot_de_passe_donne_acces(client, monkeypatch):
     monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
 
-    sans_auth = client.get("/")
-    assert sans_auth.status_code == 401
+    connexion = client.post("/login", data={"mot_de_passe": "secret"}, follow_redirects=False)
+    assert connexion.status_code == 303
+    assert connexion.headers["location"] == "/"
+    assert "session" in connexion.cookies
 
-    avec_bon_mdp = client.get("/", auth=("peu importe", "secret"))
-    assert avec_bon_mdp.status_code == 200
+    reponse = client.get("/")
+    assert reponse.status_code == 200
 
-    avec_mauvais_mdp = client.get("/", auth=("peu importe", "faux"))
-    assert avec_mauvais_mdp.status_code == 401
+
+def test_login_avec_mauvais_mot_de_passe_refuse(client, monkeypatch):
+    monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
+
+    reponse = client.post("/login", data={"mot_de_passe": "faux"})
+    assert reponse.status_code == 401
+    assert "incorrect" in reponse.text.lower()
+
+
+def test_logout_supprime_l_acces(client, monkeypatch):
+    monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
+    client.post("/login", data={"mot_de_passe": "secret"})
+    assert client.get("/").status_code == 200
+
+    client.post("/logout")
+    reponse = client.get("/", follow_redirects=False)
+    assert reponse.status_code == 303
+    assert reponse.headers["location"] == "/login"
 
 
 def test_pas_d_authentification_en_mode_local(client, monkeypatch):

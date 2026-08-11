@@ -20,6 +20,11 @@ jobs:
 
       - run: pip install -r requirements.txt
 
+      # Modèle spaCy pour l'extraction d'entreprises (US-04 évaluateur, source
+      # primaire) — pas dans requirements.txt (les modèles spaCy s'installent via cette
+      # commande dédiée, pas via pip install classique).
+      - run: python -m spacy download en_core_web_sm
+
       # Scraper (US-06 scraper) : RSS + Reddit. Identifiants Reddit scopés à ce seul
       # step (cf. audit de suivi) — évaluateur et contextualiseur n'en ont pas besoin.
       # Si absents/invalides, la collecte Reddit dégrade proprement (cf. reddit.py) :
@@ -30,11 +35,14 @@ jobs:
           REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
           REDDIT_USER_AGENT: ${{ secrets.REDDIT_USER_AGENT }}
 
-      # Évaluateur (US-08, US-01 réputation, US-05 style, US-07 LLM bootstrap — cf.
-      # doc/plan_implementation.md "État d'avancement" pour les signaux restants).
+      # Évaluateur (US-08, US-01 réputation, US-03 fact-checking, US-04 source
+      # primaire, US-05 style, US-07 LLM bootstrap — cf. doc/plan_implementation.md
+      # "État d'avancement" pour les signaux restants).
       - run: python -m fakenews.evaluateur.run_evaluateur
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_FACT_CHECK_API_KEY: ${{ secrets.GOOGLE_FACT_CHECK_API_KEY }}
+          SEC_EDGAR_USER_AGENT: ${{ secrets.SEC_EDGAR_USER_AGENT }}
 
       # Contextualiseur : sélectionne et génère la mise en contexte (US-01, US-02,
       # US-03, US-04). Dégrade proprement (sélection journalisée, rien généré) si

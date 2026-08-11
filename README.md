@@ -30,8 +30,8 @@ Détails complets : [doc/architecture.md](doc/architecture.md) et [doc/plan_impl
 ## État actuel
 
 - **Scraper** : collecte RSS et Reddit opérationnelle, déduplication, planification hebdomadaire.
-- **Évaluateur** : squelette du score composite + signal de réputation de la source. Les autres signaux (corroboration, fact-checking, style, source primaire, décalage viral, LLM bootstrap) restent à implémenter.
-- **Contextualiseur** : déclenchement, validation des preuves et persistance en place ; la génération réelle par LLM n'est pas encore branchée (choix du fournisseur non tranché).
+- **Évaluateur** : score composite + signaux réputation, fact-checking, source primaire, style, LLM bootstrap (Claude). Corroboration croisée et décalage viral restent à implémenter (nécessitent une brique de clustering commune).
+- **Contextualiseur** : déclenchement, génération réelle (Claude), validation des preuves et persistance en place.
 - **Frontend** : liste filtrable/paginée des articles suspects, détail des scores, mise en contexte.
 - **Automatisation** : les trois premiers blocs sont orchestrés en un workflow GitHub Actions hebdomadaire (`.github/workflows/pipeline_hebdomadaire.yml`).
 
@@ -45,12 +45,14 @@ Prérequis : Python 3.12+, une base PostgreSQL (locale pour le développement, [
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+python -m spacy download en_core_web_sm  # US-04 évaluateur : extraction d'entreprises (NER)
 ```
 
 Copier `.env.example` en `.env` et renseigner :
 
 - `DATABASE_URL` — chaîne de connexion PostgreSQL/Supabase
 - `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` — identifiants d'une [app Reddit de type "script"](https://reddit.com/prefs/apps) (gratuit ; optionnel, la collecte Reddit dégrade proprement si absent)
+- `GOOGLE_FACT_CHECK_API_KEY` — optionnel, US-03 évaluateur dégrade proprement si absente
 - `FRONTEND_PASSWORD` — uniquement en déploiement hébergé public (voir [doc/userstories_frontend.md](doc/userstories_frontend.md))
 
 Appliquer le schéma de base de données :
