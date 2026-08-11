@@ -35,9 +35,17 @@ couvrir :
 - **L'impact** d'une fake news (portée, conséquences).
 - **La propagation** : comment et où elle s'est diffusée.
 
+## 4. Frontend
+
+Le frontend actuel (liste filtrable + détail par article, cf. `doc/V0/`) reste
+minimal et doit être amélioré — portée précise à définir, mais candidats
+identifiés au fil de la V0 : ergonomie des filtres, accueil des nouvelles
+fonctionnalités des axes ci-dessus (soumission d'articles, commentaires,
+photos), lisibilité de la mise en contexte.
+
 ## Statut
 
-Ces trois axes ont été formulés par l'utilisateur le 2026-08-11 comme direction
+Ces quatre axes ont été formulés par l'utilisateur le 2026-08-11 comme direction
 pour l'après-V0. Aucun n'est planifié en détail ni commencé — chaque axe sera
 scopé (user stories, architecture) séparément, au moment où l'utilisateur
 décidera de l'attaquer.
