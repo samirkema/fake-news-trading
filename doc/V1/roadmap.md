@@ -1,4 +1,4 @@
-# Roadmap V2 — axes d'amélioration
+# Roadmap V1 — axes d'amélioration
 
 La V0 (cf. `doc/V0/`) est validée : scraper RSS multi-sources, 5 signaux
 évaluateur (réputation, style, fact-checking, source primaire, LLM bootstrap),
