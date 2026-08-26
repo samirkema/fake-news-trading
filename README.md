@@ -53,12 +53,13 @@ Copier `.env.example` en `.env` et renseigner :
 - `DATABASE_URL` — chaîne de connexion PostgreSQL/Supabase
 - `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` — identifiants d'une [app Reddit de type "script"](https://reddit.com/prefs/apps) (gratuit ; optionnel, la collecte Reddit dégrade proprement si absent)
 - `GOOGLE_FACT_CHECK_API_KEY` — optionnel, US-03 évaluateur dégrade proprement si absente
-- `FRONTEND_PASSWORD` — uniquement en déploiement hébergé public (voir [doc/userstories_frontend.md](doc/userstories_frontend.md))
+- `FRONTEND_PASSWORD` — mot de passe partagé, uniquement en déploiement hébergé public. À la connexion l'utilisateur saisit aussi un pseudo qui détermine son rôle via la table `comptes` (fondation V1, voir [doc/V1/comptes-3-roles.md](doc/V1/comptes-3-roles.md))
 
-Appliquer le schéma de base de données :
+Appliquer le schéma de base de données (migrations dans l'ordre) :
 
 ```bash
 psql "$DATABASE_URL" -f supabase/migrations/0001_init_schema.sql
+psql "$DATABASE_URL" -f supabase/migrations/0002_comptes.sql
 ```
 
 ## Lancer les tests

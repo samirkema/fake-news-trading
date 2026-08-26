@@ -43,6 +43,14 @@ identifiés au fil de la V0 : ergonomie des filtres, accueil des nouvelles
 fonctionnalités des axes ci-dessus (soumission d'articles, commentaires,
 photos), lisibilité de la mise en contexte.
 
+### Comptes à 3 rôles — fondation posée (2026-08-26)
+
+La connexion distingue désormais trois rôles (`spectateur`, `contributeur`,
+`superadmin`) via un pseudo saisi en plus du mot de passe partagé. Aucune
+capacité n'y est encore conditionnée — c'est la brique de base pour les axes
+ci-dessus (interaction utilisateur, modération, soumission). Détail et limite de
+sécurité connue : `doc/V1/comptes-3-roles.md`.
+
 ## Statut
 
 Ces quatre axes ont été formulés par l'utilisateur le 2026-08-11 comme direction

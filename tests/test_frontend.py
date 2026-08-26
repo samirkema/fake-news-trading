@@ -135,19 +135,20 @@ def test_sans_cookie_redirige_vers_login_si_mot_de_passe_configure(client, monke
     assert reponse.headers["location"] == "/login"
 
 
-def test_page_login_n_a_pas_de_champ_utilisateur(client, monkeypatch):
+def test_page_login_a_un_champ_pseudo_et_mot_de_passe(client, monkeypatch):
     monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
     reponse = client.get("/login")
     assert reponse.status_code == 200
+    assert 'name="pseudo"' in reponse.text
     assert 'type="password"' in reponse.text
-    assert 'type="text"' not in reponse.text
-    assert "username" not in reponse.text.lower()
 
 
-def test_login_avec_bon_mot_de_passe_donne_acces(client, monkeypatch):
+def test_login_avec_pseudo_et_bon_mot_de_passe_donne_acces(client, monkeypatch):
     monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
 
-    connexion = client.post("/login", data={"mot_de_passe": "secret"}, follow_redirects=False)
+    connexion = client.post(
+        "/login", data={"pseudo": "alice", "mot_de_passe": "secret"}, follow_redirects=False
+    )
     assert connexion.status_code == 303
     assert connexion.headers["location"] == "/"
     assert "session" in connexion.cookies
@@ -156,17 +157,44 @@ def test_login_avec_bon_mot_de_passe_donne_acces(client, monkeypatch):
     assert reponse.status_code == 200
 
 
+def test_login_sans_pseudo_rejete(client, monkeypatch):
+    monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
+    reponse = client.post("/login", data={"mot_de_passe": "secret"})
+    assert reponse.status_code == 422  # champ de formulaire requis (FastAPI)
+
+
+def test_login_pseudo_invalide_rejete(client, monkeypatch):
+    monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
+    reponse = client.post("/login", data={"pseudo": "a b/c", "mot_de_passe": "secret"})
+    assert reponse.status_code == 401
+    assert "pseudo invalide" in reponse.text.lower()
+
+
 def test_login_avec_mauvais_mot_de_passe_refuse(client, monkeypatch):
     monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
 
-    reponse = client.post("/login", data={"mot_de_passe": "faux"})
+    reponse = client.post("/login", data={"pseudo": "alice", "mot_de_passe": "faux"})
     assert reponse.status_code == 401
     assert "incorrect" in reponse.text.lower()
 
 
+def test_cookie_falsifie_redirige_vers_login(client, monkeypatch):
+    monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
+    # Cookie forgé : on garde une signature valide pour « alice » mais on prétend
+    # être « samirkema » -> la signature ne correspond pas, accès refusé.
+    from fakenews.frontend.app import _valeur_cookie
+
+    signature_alice = _valeur_cookie("alice", "secret").split(":", 1)[1]
+    reponse = client.get(
+        "/", headers={"Cookie": f"session=samirkema:{signature_alice}"}, follow_redirects=False
+    )
+    assert reponse.status_code == 303
+    assert reponse.headers["location"] == "/login"
+
+
 def test_logout_supprime_l_acces(client, monkeypatch):
     monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
-    client.post("/login", data={"mot_de_passe": "secret"})
+    client.post("/login", data={"pseudo": "alice", "mot_de_passe": "secret"})
     assert client.get("/").status_code == 200
 
     client.post("/logout")
@@ -179,6 +207,70 @@ def test_pas_d_authentification_en_mode_local(client, monkeypatch):
     monkeypatch.delenv("FRONTEND_PASSWORD", raising=False)
     reponse = client.get("/")
     assert reponse.status_code == 200
+
+
+def test_superadmin_a_un_code_distinct_du_mot_de_passe_partage(client, db_session, monkeypatch):
+    from sqlalchemy import text
+
+    monkeypatch.setenv("FRONTEND_PASSWORD", "partage")
+    db_session.execute(
+        text(
+            "update comptes set secret_hash = crypt('code-samir', gen_salt('bf')) "
+            "where lower(pseudo) = 'samirkema'"
+        )
+    )
+    db_session.flush()
+
+    # le mot de passe partagé ne donne PAS accès à samirkema
+    refuse = client.post("/login", data={"pseudo": "samirkema", "mot_de_passe": "partage"})
+    assert refuse.status_code == 401
+
+    # son code personnel, oui
+    ok = client.post(
+        "/login",
+        data={"pseudo": "samirkema", "mot_de_passe": "code-samir"},
+        follow_redirects=False,
+    )
+    assert ok.status_code == 303
+    assert client.get("/").status_code == 200
+
+
+def test_mot_de_passe_partage_reste_valable_pour_les_autres_pseudos(client, db_session, monkeypatch):
+    from sqlalchemy import text
+
+    monkeypatch.setenv("FRONTEND_PASSWORD", "partage")
+    db_session.execute(
+        text(
+            "update comptes set secret_hash = crypt('code-samir', gen_salt('bf')) "
+            "where lower(pseudo) = 'samirkema'"
+        )
+    )
+    db_session.flush()
+
+    autre = client.post(
+        "/login", data={"pseudo": "curieux", "mot_de_passe": "partage"}, follow_redirects=False
+    )
+    assert autre.status_code == 303
+    assert client.get("/").status_code == 200
+
+
+def test_le_role_n_est_jamais_affiche(client, db_session, monkeypatch):
+    # L'utilisateur ne doit pas pouvoir voir son statut : ni le pseudo, ni le rôle
+    # ne remontent dans les pages, quel que soit le rôle résolu.
+    from fakenews.models import Compte
+
+    monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
+    db_session.add(Compte(pseudo="chef", role="superadmin"))
+    article = _inserer_article_avec_score(db_session, "role-cache", 80.0)
+    db_session.flush()
+    client.post("/login", data={"pseudo": "chef", "mot_de_passe": "secret"})
+
+    for chemin in ("/", f"/articles/{article.id}"):
+        texte = client.get(chemin).text
+        assert "superadmin" not in texte
+        assert "contributeur" not in texte
+        assert "spectateur" not in texte
+        assert "chef" not in texte
 
 
 def test_date_min_malformee_rejetee_proprement(client):

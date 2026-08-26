@@ -86,6 +86,34 @@ class Score(Base):
     )
 
 
+class Compte(Base):
+    """Lue par le frontend (jamais écrite par lui — lecture seule stricte, cf.
+    doc/V0/architecture.md) pour résoudre le rôle d'un pseudo connecté. Fondation
+    V1 de l'authentification à 3 rôles (spectateur / contributeur / superadmin,
+    cf. doc/V1/comptes-3-roles.md). Un pseudo absent de la table => rôle
+    « spectateur ». L'index unique insensible à la casse sur `lower(pseudo)` est
+    porté par la migration 0002 (non déclaré ici : SQLAlchemy ne gère pas
+    proprement un index fonctionnel via `__table_args__` sur cette version)."""
+
+    __tablename__ = "comptes"
+
+    ROLES = ("spectateur", "contributeur", "superadmin")
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    pseudo: Mapped[str] = mapped_column(Text, nullable=False)
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    # NULL => ce pseudo se connecte avec le mot de passe partagé (FRONTEND_PASSWORD).
+    # Renseigné (hash bcrypt via crypt()/gen_salt('bf')) => ce pseudo DOIT utiliser
+    # ce code personnel, le mot de passe partagé ne lui donne pas accès. Utilisé
+    # pour samirkema/superadmin (cf. doc/V1/comptes-3-roles.md).
+    secret_hash: Mapped[str | None] = mapped_column(Text)
+    date_creation: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint(f"role in {ROLES}", name="ck_comptes_role"),
+    )
+
+
 class MiseEnContexte(Base):
     """Écrite par le contextualiseur (US-01 à US-04 contextualiseur), uniquement pour les
     articles au-dessus du seuil de suspicion. Lue par le frontend."""
