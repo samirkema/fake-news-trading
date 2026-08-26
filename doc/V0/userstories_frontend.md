@@ -60,5 +60,5 @@ Le mode local n'est pas un second contexte d'usage à maintenir au même niveau 
 
 ## Hors périmètre (pour rappel)
 
-- L'authentification et le multi-utilisateurs ne sont pas couverts ici — usage mono-utilisateur pour l'instant (cf. `architecture.md`).
+- L'authentification et le multi-utilisateurs ne sont pas couverts ici — usage mono-utilisateur pour l'instant (cf. `architecture.md`). **MàJ V1 (2026-08-26) :** une fondation « comptes à 3 rôles » (pseudo + mot de passe partagé) a depuis été posée, cf. `doc/V1/comptes-3-roles.md` ; aucune capacité n'y est encore conditionnée.
 - Toute action d'écriture (validation manuelle, correction de score par un humain) n'est pas couverte — le frontend reste strictement en lecture seule à ce stade.
