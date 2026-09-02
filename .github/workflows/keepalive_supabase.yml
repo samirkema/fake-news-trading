@@ -1,0 +1,27 @@
+name: Keep-alive Supabase
+
+# Le tier gratuit Supabase met le projet en pause après ~7 jours sans aucune
+# requête sur la base. Le pipeline hebdomadaire étant en pause et une visite non
+# authentifiée du frontend ne touchant pas la base (redirection /login avant
+# toute requête SQL), plus rien ne la maintient active. Ce job fait un simple
+# `select 1` tous les 3 jours : il n'écrit rien, ne relance aucun scraping et
+# n'utilise aucune clé LLM.
+
+"on":
+  schedule:
+    - cron: "0 5 */3 * *" # tous les 3 jours à 05:00 UTC
+  workflow_dispatch: {} # déclenchement manuel possible depuis GitHub
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install "sqlalchemy>=2.0" "psycopg2-binary>=2.9"
+
+      - run: python -c "import os; from sqlalchemy import create_engine, text; create_engine(os.environ['DATABASE_URL']).connect().execute(text('select 1'))"
