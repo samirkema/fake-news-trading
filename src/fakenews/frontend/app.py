@@ -5,11 +5,14 @@ d'écriture."""
 
 import hashlib
 import hmac
+import logging
 import os
 import re
+import time
 import uuid
+from collections import deque
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, time as heure, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlencode
@@ -25,16 +28,42 @@ from fakenews.contextualiseur.declenchement import SEUIL_PAR_DEFAUT
 from fakenews.db import SessionLocal
 from fakenews.models import Article, Compte, MiseEnContexte, Score
 
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title="Fake News — Détection")
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 ARTICLES_PAR_PAGE = 50
 NOM_COOKIE = "session"
 ROLE_DEFAUT = "spectateur"
+DUREE_SESSION = timedelta(days=30)
+
+# Mode local explicite. Auparavant l'absence de FRONTEND_PASSWORD suffisait à
+# ouvrir le site en superadmin sans cookie : une variable d'environnement Vercel
+# supprimée ou mal orthographiée rendait le site public, alors que
+# doc/V0/userstories_frontend.md US-04 qualifie l'authentification de « condition
+# bloquante... qui ne peut être levée que par une décision explicite du porteur du
+# projet, pas par défaut ». Le défaut est désormais fermé : il faut poser
+# FAKENEWS_MODE=local pour désactiver l'auth (cf. audit, finding H4).
+MODE_LOCAL = "local"
+
+# Anti-bruteforce sur /login (cf. audit, finding M6) : le mot de passe partagé est
+# un secret unique, l'endpoint n'avait aucune friction. Fenêtre glissante en
+# mémoire du process. Limite connue et assumée : sur Vercel chaque instance a sa
+# propre mémoire, donc le plafond réel est multiplié par le nombre d'instances
+# tièdes — c'est un ralentisseur, pas une barrière cryptographique.
+LOGIN_TENTATIVES_MAX = 10
+LOGIN_FENETRE_SECONDES = 300
+_tentatives_login: dict[str, deque] = {}
+
 # Pseudo : normalisé en minuscules. Jeu de caractères restreint car il est aussi
-# une moitié de la valeur du cookie signé (« pseudo:signature ») — pas de « : »,
-# pas de caractère de contrôle.
+# un segment de la valeur du cookie signé (« pseudo:expiration:signature ») — pas
+# de « : », pas de caractère de contrôle.
 _PSEUDO_RE = re.compile(r"^[a-z0-9._-]{1,64}$")
+
+
+def _mode_local() -> bool:
+    return os.environ.get("FAKENEWS_MODE", "").strip().lower() == MODE_LOCAL
 
 
 def _normaliser_pseudo(brut: str) -> Optional[str]:
@@ -52,34 +81,82 @@ def _cle_signature(mot_de_passe_partage: str, secret_hash: Optional[str]) -> byt
     return f"{mot_de_passe_partage}\x00{secret_hash or ''}".encode()
 
 
-def _signature(pseudo: str, mot_de_passe_partage: str, secret_hash: Optional[str]) -> str:
+def _signature(
+    pseudo: str, expiration: int, mot_de_passe_partage: str, secret_hash: Optional[str]
+) -> str:
+    """L'expiration est DANS la charge signée : sans elle, le cookie était un HMAC
+    déterministe du seul pseudo, donc valide indéfiniment une fois capté, et
+    révocable uniquement en faisant tourner le mot de passe partagé — ce qui
+    déconnecte tout le monde (cf. audit, finding M5). `max_age` ne protège rien :
+    c'est une indication au navigateur, pas une contrainte serveur."""
     return hmac.new(
         _cle_signature(mot_de_passe_partage, secret_hash),
-        f"fakenews-session:{pseudo}".encode(),
+        f"fakenews-session:{pseudo}:{expiration}".encode(),
         hashlib.sha256,
     ).hexdigest()
 
 
-def _valeur_cookie(pseudo: str, mot_de_passe_partage: str, secret_hash: Optional[str] = None) -> str:
-    return f"{pseudo}:{_signature(pseudo, mot_de_passe_partage, secret_hash)}"
+def _valeur_cookie(
+    pseudo: str,
+    mot_de_passe_partage: str,
+    secret_hash: Optional[str] = None,
+    expiration: Optional[int] = None,
+) -> str:
+    if expiration is None:
+        expiration = int(time.time() + DUREE_SESSION.total_seconds())
+    return f"{pseudo}:{expiration}:{_signature(pseudo, expiration, mot_de_passe_partage, secret_hash)}"
 
 
-def _pseudo_revendique(cookie: Optional[str]) -> Optional[str]:
-    """Pseudo revendiqué par le cookie, avant vérification de la signature (celle-ci
-    a besoin du `secret_hash` du compte, donc d'un accès base — cf. compte_courant)."""
-    if not cookie or ":" not in cookie:
+def _decomposer_cookie(cookie: Optional[str]) -> Optional[tuple[str, int, str]]:
+    """(pseudo, expiration, signature) si la forme du cookie est valide et la
+    session non expirée — avant toute vérification cryptographique, qui a besoin du
+    `secret_hash` du compte donc d'un accès base (cf. compte_courant)."""
+    if not cookie:
         return None
-    pseudo, _signature_recue = cookie.rsplit(":", 1)
-    return pseudo if _PSEUDO_RE.match(pseudo) else None
+    parties = cookie.split(":")
+    if len(parties) != 3:
+        return None
+    pseudo, expiration_brute, signature_recue = parties
+    if not _PSEUDO_RE.match(pseudo):
+        return None
+    try:
+        expiration = int(expiration_brute)
+    except ValueError:
+        return None
+    if expiration <= time.time():
+        return None
+    return pseudo, expiration, signature_recue
 
 
-def _cookie_valide(
-    cookie: str, pseudo: str, mot_de_passe_partage: str, secret_hash: Optional[str]
+def _signature_valide(
+    pseudo: str,
+    expiration: int,
+    signature_recue: str,
+    mot_de_passe_partage: str,
+    secret_hash: Optional[str],
 ) -> bool:
-    _pseudo, signature_recue = cookie.rsplit(":", 1)
     return hmac.compare_digest(
-        signature_recue, _signature(pseudo, mot_de_passe_partage, secret_hash)
+        signature_recue, _signature(pseudo, expiration, mot_de_passe_partage, secret_hash)
     )
+
+
+def _trop_de_tentatives(identifiant_client: str) -> bool:
+    """Fenêtre glissante : purge les tentatives sorties de la fenêtre, puis décide."""
+    maintenant = time.monotonic()
+    tentatives = _tentatives_login.setdefault(identifiant_client, deque())
+    while tentatives and maintenant - tentatives[0] > LOGIN_FENETRE_SECONDES:
+        tentatives.popleft()
+    if not tentatives:
+        _tentatives_login.pop(identifiant_client, None)
+    return len(tentatives) >= LOGIN_TENTATIVES_MAX
+
+
+def _enregistrer_tentative_ratee(identifiant_client: str) -> None:
+    _tentatives_login.setdefault(identifiant_client, deque()).append(time.monotonic())
+
+
+def _client_de(request: Request) -> str:
+    return request.client.host if request.client else "inconnu"
 
 
 class AccesRefuse(Exception):
@@ -106,31 +183,42 @@ def compte_courant(request: Request, session: Session = Depends(get_session)) ->
     """Fondation V1 de l'auth à 3 rôles (cf. doc/V1/comptes-3-roles.md). Sert de
     garde d'accès (US-04 frontend) ET résout le rôle du visiteur connecté :
 
-    - mode local (FRONTEND_PASSWORD non définie) : superadmin fictif — le mode
-      local est réservé au développeur (cf. US-04 frontend) ;
-    - cookie absent, mal formé ou signature invalide : accès refusé (redirection
-      vers /login) ;
+    - mode local EXPLICITE (FAKENEWS_MODE=local) : superadmin fictif — réservé au
+      développeur (cf. US-04 frontend) ;
+    - cookie absent, mal formé, expiré ou signature invalide : accès refusé
+      (redirection vers /login) ;
     - pseudo présent dans la table `comptes` : rôle associé ;
     - pseudo inconnu : « spectateur » (défaut).
+
+    Le défaut est FERMÉ : hors mode local explicite, une FRONTEND_PASSWORD absente
+    ne rend pas le site public, elle le rend inaccessible. C'est l'inverse du
+    comportement précédent, qui transformait une variable d'environnement oubliée
+    en ouverture d'accès public (cf. audit, finding H4).
 
     La signature du cookie est liée au `secret_hash` du compte quand il en a un
     (samirkema) : un cookie superadmin ne peut pas être fabriqué avec le seul mot
     de passe partagé. Aucune capacité n'est encore conditionnée au rôle — c'est la
     fondation. Le rôle n'est jamais renvoyé aux gabarits : l'utilisateur ne voit
     pas son statut."""
-    mot_de_passe = os.environ.get("FRONTEND_PASSWORD")
-    if mot_de_passe is None:
+    if _mode_local():
         return CompteCourant(pseudo="local", role="superadmin")
-    cookie = request.cookies.get(NOM_COOKIE)
-    pseudo = _pseudo_revendique(cookie)
-    if pseudo is None:
+    mot_de_passe = os.environ.get("FRONTEND_PASSWORD")
+    if not mot_de_passe:
+        logger.error(
+            "FRONTEND_PASSWORD absente hors mode local : tout accès est refusé. "
+            "Définir la variable, ou poser FAKENEWS_MODE=local pour du développement."
+        )
         raise AccesRefuse()
+    decompose = _decomposer_cookie(request.cookies.get(NOM_COOKIE))
+    if decompose is None:
+        raise AccesRefuse()
+    pseudo, expiration, signature_recue = decompose
     ligne = session.execute(
         select(Compte.role, Compte.secret_hash).where(func.lower(Compte.pseudo) == pseudo)
     ).one_or_none()
     role = (ligne.role if ligne else None) or ROLE_DEFAUT
     secret_hash = ligne.secret_hash if ligne else None
-    if not _cookie_valide(cookie, pseudo, mot_de_passe, secret_hash):
+    if not _signature_valide(pseudo, expiration, signature_recue, mot_de_passe, secret_hash):
         raise AccesRefuse()
     return CompteCourant(pseudo=pseudo, role=role)
 
@@ -156,10 +244,28 @@ def connexion(
     """Le pseudo détermine le rôle (cf. doc/V1/comptes-3-roles.md). Mot de passe :
     un compte doté d'un `secret_hash` en base (samirkema/superadmin) doit fournir
     CE code — le mot de passe partagé ne lui donne pas accès. Tous les autres
-    pseudos utilisent le mot de passe partagé FRONTEND_PASSWORD."""
+    pseudos utilisent le mot de passe partagé FRONTEND_PASSWORD.
+
+    Les tentatives ratées sont comptées par client sur une fenêtre glissante
+    (cf. audit, finding M6)."""
     partage = os.environ.get("FRONTEND_PASSWORD")
+    if not partage:
+        logger.error("Tentative de connexion alors que FRONTEND_PASSWORD n'est pas définie.")
+        return _erreur_login(request, "Authentification non configurée sur ce déploiement.")
+
+    client = _client_de(request)
+    if _trop_de_tentatives(client):
+        logger.warning("Trop de tentatives de connexion depuis %s — refus temporaire.", client)
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"erreur": "Trop de tentatives. Réessayer dans quelques minutes."},
+            status_code=429,
+        )
+
     pseudo_normalise = _normaliser_pseudo(pseudo)
     if pseudo_normalise is None:
+        _enregistrer_tentative_ratee(client)
         return _erreur_login(
             request, "Pseudo invalide (lettres, chiffres, « . _ - », 64 caractères max)."
         )
@@ -174,17 +280,20 @@ def connexion(
             ).scalar_one()
         )
     else:
-        mot_de_passe_ok = partage is not None and hmac.compare_digest(mot_de_passe, partage)
+        mot_de_passe_ok = hmac.compare_digest(mot_de_passe, partage)
     if not mot_de_passe_ok:
+        _enregistrer_tentative_ratee(client)
         return _erreur_login(request, "Identifiants incorrects.")
+
+    _tentatives_login.pop(client, None)
     reponse = RedirectResponse(url="/", status_code=303)
     reponse.set_cookie(
         NOM_COOKIE,
-        _valeur_cookie(pseudo_normalise, partage or "", secret_hash),
+        _valeur_cookie(pseudo_normalise, partage, secret_hash),
         httponly=True,
         secure=True,
         samesite="lax",
-        max_age=60 * 60 * 24 * 30,
+        max_age=int(DUREE_SESSION.total_seconds()),
     )
     return reponse
 
@@ -192,7 +301,10 @@ def connexion(
 @app.post("/logout")
 def deconnexion():
     reponse = RedirectResponse(url="/login", status_code=303)
-    reponse.delete_cookie(NOM_COOKIE)
+    # Attributs symétriques de la pose : un navigateur qui applique strictement les
+    # règles de correspondance ignore un Set-Cookie de suppression dont les
+    # attributs divergent (cf. audit, finding L12).
+    reponse.delete_cookie(NOM_COOKIE, httponly=True, secure=True, samesite="lax")
     return reponse
 
 
@@ -239,6 +351,12 @@ def _parser_date(brut: Optional[str], nom: str) -> Optional[date]:
         raise HTTPException(status_code=422, detail=f"{nom} invalide")
 
 
+def _debut_de_journee(jour: date) -> datetime:
+    """Minuit UTC du jour donné. Explicite le fuseau plutôt que de laisser Postgres
+    coercer une `date` nue selon le TimeZone de la session, qui dépend du serveur."""
+    return datetime.combine(jour, heure.min, tzinfo=timezone.utc)
+
+
 @app.get("/", response_class=HTMLResponse)
 def liste_articles(
     request: Request,
@@ -267,10 +385,21 @@ def liste_articles(
     if seuil_effectif is not None:
         stmt = stmt.where(Score.score_final >= seuil_effectif)
     if date_min:
-        stmt = stmt.where(Article.date_publication >= date_min)
+        stmt = stmt.where(Article.date_publication >= _debut_de_journee(date_min))
     if date_max:
-        stmt = stmt.where(Article.date_publication <= date_max)
-    stmt = stmt.order_by(Score.score_final.desc()).limit(ARTICLES_PAR_PAGE + 1).offset((page - 1) * ARTICLES_PAR_PAGE)
+        # Borne haute INCLUSIVE : comparer un timestamptz à une `date` la coerce à
+        # minuit, ce qui supprimait toute la journée `date_max` alors que le
+        # formulaire promet « jusqu'au » (cf. audit, finding M2).
+        stmt = stmt.where(Article.date_publication < _debut_de_journee(date_max + timedelta(days=1)))
+    # Départage par id : sans clé secondaire stable, deux articles à score égal
+    # peuvent changer d'ordre entre la requête de la page 1 et celle de la page 2,
+    # ce qui duplique les uns et masque les autres (cf. audit, finding M1). Les
+    # scores sont des numeric(5,2) : les ex æquo sont la règle, pas l'exception.
+    stmt = (
+        stmt.order_by(Score.score_final.desc(), Article.id)
+        .limit(ARTICLES_PAR_PAGE + 1)
+        .offset((page - 1) * ARTICLES_PAR_PAGE)
+    )
 
     lignes = session.execute(stmt).all()
     a_page_suivante = len(lignes) > ARTICLES_PAR_PAGE

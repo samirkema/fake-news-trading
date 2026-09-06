@@ -8,3 +8,6 @@ __pycache__/
 .claude/settings.local.json
 .vercel
 .env*
+# `.env*` couvre aussi .env.example / .env.template : sans cette exception, un
+# nouveau gabarit d'environnement serait silencieusement ignoré (audit, finding L9).
+!.env.example

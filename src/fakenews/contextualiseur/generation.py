@@ -3,7 +3,12 @@ l'évaluateur (cf. doc/userstories_contextualiseur.md). Réutilise validation.py
 construit sans LLM) pour appliquer le garde-fou preuve_id sur la sortie du modèle."""
 
 from fakenews.contextualiseur.validation import valider_faits_traces
-from fakenews.llm import appeler_structure, creer_client
+from fakenews.llm import (
+    CONSIGNE_CONTENU_NON_FIABLE,
+    appeler_structure,
+    creer_client,
+    encadrer_contenu_non_fiable,
+)
 
 SCHEMA = {
     "type": "object",
@@ -51,6 +56,7 @@ SYSTEM = (
     "et limite-toi aux signaux disponibles (réputation, style...).\n"
     "4. Formulation toujours prudente : 'signaux de suspicion détectés', jamais "
     "d'affirmation catégorique nommant la source comme mensongère."
+    + CONSIGNE_CONTENU_NON_FIABLE
 )
 
 
@@ -67,10 +73,12 @@ def generer_mise_en_contexte(titre: str, contenu: str, sous_scores: dict, client
     """Retourne {"explication", "faits_traces", "deductions_llm", "sources_utilisees",
     "niveau_confiance"} — faits_traces déjà validés contre les preuve_id réels."""
     client = client or creer_client()
+    # Le contenu collecté est encadré ; les signaux, eux, viennent de l'évaluateur
+    # et restent hors du cadre — ce sont nos données, pas celles d'un tiers.
     prompt = (
-        f"Titre : {titre}\n\n"
-        f"Contenu (extrait) :\n{contenu[:2000]}\n\n"
-        f"Signaux produits par l'évaluateur :\n{_formatter_signaux(sous_scores)}"
+        "Article à mettre en contexte :\n"
+        + encadrer_contenu_non_fiable(f"Titre : {titre}\n\nContenu (extrait) :\n{contenu[:2000]}")
+        + f"\n\nSignaux produits par l'évaluateur :\n{_formatter_signaux(sous_scores)}"
     )
     brut = appeler_structure(client, SYSTEM, prompt, SCHEMA, max_tokens=1500)
 

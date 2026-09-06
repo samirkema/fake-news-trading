@@ -1,0 +1,15 @@
+# Dépendances de la SEULE fonction serverless Vercel (frontend de consultation).
+# @vercel/python lit ce fichier en priorité sur celui de la racine parce qu'il est
+# à côté du point d'entrée api/index.py.
+#
+# Le frontend est en lecture seule et n'importe que FastAPI + Jinja2 + SQLAlchemy :
+# lui déployer spacy, praw, feedparser, anthropic, httpx, uvicorn et pytest (ce que
+# faisait le requirements.txt monolithique) gonflait le bundle de plusieurs
+# centaines de Mo pour du code inatteignable — cf. audit, SRE/Performance.
+
+sqlalchemy>=2.0,<3.0
+psycopg2-binary>=2.9,<3.0
+python-dotenv>=1.0,<2.0
+fastapi>=0.110,<1.0
+jinja2>=3.1,<4.0
+python-multipart>=0.0.9,<1.0

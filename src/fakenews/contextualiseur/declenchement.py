@@ -11,13 +11,20 @@ PLAFOND_APPELS_PAR_DEFAUT = 20
 
 def articles_a_traiter(scores: list[dict], seuil: float = SEUIL_PAR_DEFAUT, plafond: int | None = PLAFOND_APPELS_PAR_DEFAUT) -> list[dict]:
     """scores: liste de {"article_id": ..., "score_final": float | None, "non_evaluable": bool}
-    (sortie de US-08 évaluateur pour chaque article scoré cette semaine).
+    (sortie de US-08 évaluateur pour tous les articles scorés n'ayant pas encore de
+    mise en contexte — pas seulement ceux de la semaine : l'appelant passe le
+    backlog complet, cf. run_contextualiseur.selectionner_articles_a_traiter).
 
     Retourne les articles au-dessus du seuil (atteint ou dépassé), triés par score
-    décroissant, plafonnés au nombre d'appels LLM autorisés par run (les articles en
-    trop restent non traités cette semaine — pas de report automatique au run suivant,
-    cf. limite documentée dans l'audit de suivi). Un article `non_évaluable` est traité
-    comme sous le seuil."""
+    décroissant, plafonnés au nombre d'appels LLM autorisés par run. Les articles en
+    trop sont bien repris aux runs suivants : traiter un article lui donne une
+    `MiseEnContexte`, ce qui le sort du pool, et les suivants remontent dans le
+    classement. La file avance donc par tranches de `plafond`, du score le plus
+    élevé au plus faible. Un article `non_évaluable` est traité comme sous le seuil.
+
+    (La docstring précédente affirmait le contraire — « cette semaine », « pas de
+    report automatique » : deux descriptions inexactes du comportement réel,
+    cf. audit, finding L7.)"""
     candidats = [
         s
         for s in scores

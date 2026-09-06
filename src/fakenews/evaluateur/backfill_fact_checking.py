@@ -27,29 +27,49 @@ def _sans_fact_checking_valide(score: Score) -> bool:
     return signal is None or signal.get("valeur") is None
 
 
-def backfiller_fact_checking(session: Session, client: httpx.Client | None = None) -> int:
-    scores = session.execute(select(Score)).scalars().all()
-    a_traiter = [s for s in scores if _sans_fact_checking_valide(s)]
-    logger.info("%d score(s) sans signal fact_checking valide sur %d au total", len(a_traiter), len(scores))
-    if not a_traiter:
-        return 0
+# Itération par lots plutôt qu'un `select(Score)` intégral en mémoire
+# (cf. audit, finding M10) : le filtre porte sur du JSONB, donc il reste côté Python.
+TAILLE_LOT = 200
 
+
+def backfiller_fact_checking(session: Session, client: httpx.Client | None = None) -> int:
     ferme_client = client is None
     client = client or httpx.Client(timeout=10.0)
     nb_traites = 0
+    decalage = 0
     try:
-        for score in a_traiter:
-            article = session.get(Article, score.article_id)
-            resultat = evaluer_fact_checking(article.titre, client=client)
+        while True:
+            lot = (
+                session.execute(select(Score).order_by(Score.id).limit(TAILLE_LOT).offset(decalage))
+                .scalars()
+                .all()
+            )
+            if not lot:
+                break
+            decalage += len(lot)
+            for score in lot:
+                if not _sans_fact_checking_valide(score):
+                    continue
+                article = session.get(Article, score.article_id)
+                if article is None:
+                    logger.warning("Score %s orphelin (article absent) — ignoré.", score.id)
+                    continue
+                resultat = evaluer_fact_checking(article.titre, client=client)
 
-            # Réassignation (pas mutation en place) pour que SQLAlchemy détecte le
-            # changement sur la colonne JSONB sans flag_modified explicite.
-            score.sous_scores = {**score.sous_scores, "fact_checking": resultat}
-            recalcul = calculer_score_composite(score.sous_scores, POIDS_PAR_DEFAUT)
-            score.poids = {signal: POIDS_PAR_DEFAUT[signal] for signal in score.sous_scores}
-            score.score_final = recalcul["score_final"]
-            score.non_evaluable = recalcul["non_evaluable"]
-            nb_traites += 1
+                # Réassignation (pas mutation en place) pour que SQLAlchemy détecte le
+                # changement sur la colonne JSONB sans flag_modified explicite.
+                score.sous_scores = {**score.sous_scores, "fact_checking": resultat}
+                recalcul = calculer_score_composite(score.sous_scores, POIDS_PAR_DEFAUT)
+                # Fusion, pas écrasement : `poids` trace les poids réellement
+                # appliqués, y compris ceux d'un calcul antérieur (finding M10).
+                score.poids = {
+                    **(score.poids or {}),
+                    **{s: POIDS_PAR_DEFAUT.get(s, 0.0) for s in score.sous_scores},
+                }
+                score.detail_calcul = recalcul["detail"]
+                score.score_final = recalcul["score_final"]
+                score.non_evaluable = recalcul["non_evaluable"]
+                nb_traites += 1
     finally:
         if ferme_client:
             client.close()

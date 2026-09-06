@@ -37,7 +37,8 @@ class Article(Base):
     url_canonique: Mapped[str] = mapped_column(Text, nullable=False)
     hash_contenu: Mapped[str] = mapped_column(Text, nullable=False)
     plateforme: Mapped[str] = mapped_column(String(20), nullable=False)
-    # ex. reddit: {"subreddit", "upvotes", "nb_commentaires"} ; toute plateforme: {"gdelt_event_id"}
+    # ex. reddit: {"subreddit", "score", "nb_commentaires"} ("score" = upvotes nets,
+    # nom du champ PRAW, cf. scraper/reddit.py) ; toute plateforme: {"gdelt_event_id"}
     metadonnees: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     date_collecte: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -66,6 +67,11 @@ class Score(Base):
     sous_scores: Mapped[dict] = mapped_column(JSONB, nullable=False)
     # poids réellement appliqués à ce calcul (traçabilité, cf. US-08 évaluateur)
     poids: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+    # Contribution de chaque signal au score final : {signal: {valeur, poids, exclu}}.
+    # Exigé explicitement par US-08 évaluateur ; NULL pour les scores calculés avant
+    # l'ajout de la colonne (migration 0003, pas de rescoring rétroactif).
+    detail_calcul: Mapped[dict | None] = mapped_column(JSONB)
 
     score_final: Mapped[float | None] = mapped_column(Numeric(5, 2))
     non_evaluable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

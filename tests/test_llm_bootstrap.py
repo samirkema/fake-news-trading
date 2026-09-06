@@ -17,7 +17,11 @@ def test_echec_de_l_appel_degrade_en_valeur_none():
     resultat = evaluer_llm_bootstrap("Titre", "Contenu", client=client)
     assert resultat["valeur"] is None
     assert resultat["preuve_id"] == "llm_bootstrap"
-    assert "quota dépassé" in resultat["raison"]
+    # `raison` est persistée puis affichée dans le frontend : elle porte le TYPE de
+    # l'exception, jamais son message brut, qui peut transporter une URL contenant
+    # une clé d'API (cf. audit, finding H2 — prouvé sur fact_checking).
+    assert "RuntimeError" in resultat["raison"]
+    assert "quota dépassé" not in resultat["raison"]
 
 
 def test_reponse_malformee_degrade_en_valeur_none():

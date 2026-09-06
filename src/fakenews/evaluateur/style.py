@@ -41,10 +41,30 @@ def _detecter_langue(texte: str) -> str:
     return "fr" if len(mots & _MOTS_OUTILS_FR) >= 2 else "en"
 
 
+# En deçà, un corps de texte est trop court pour que l'absence de citation
+# signifie quoi que ce soit : un post Reddit de type lien a un `selftext` vide, et
+# le pénaliser de 15 points pour « aucune citation » n'est pas un signal, c'est du
+# bruit (cf. audit, finding M3).
+LONGUEUR_MIN_POUR_CITATION = 200
+
+
 def evaluer_style(titre: str, contenu: str, auteur: str | None) -> dict:
-    """Retourne {"valeur": float, "raison": str, "preuve_id": "style"}. Chaque
+    """Retourne {"valeur": float | None, "raison": str, "preuve_id": "style"}. Chaque
     signal détecté contribue individuellement à la justification tracée (cf. US-05
-    évaluateur, critère d'acceptation "chaque signal détecté... de façon traçable")."""
+    évaluateur, critère d'acceptation "chaque signal détecté... de façon traçable").
+
+    `valeur` est None (signal exclu, cf. US-08) quand il n'y a littéralement rien à
+    analyser. Auparavant ce signal renvoyait toujours une valeur, ce qui rendait
+    `non_evaluable` mathématiquement inatteignable et transformait en code mort la
+    contrainte SQL, le filtre du frontend et la garde du contextualiseur qui le
+    défendent (cf. audit, finding M3)."""
+    if not titre.strip() and not contenu.strip():
+        return {
+            "valeur": None,
+            "raison": "non applicable — ni titre ni contenu exploitable",
+            "preuve_id": "style",
+        }
+
     signaux = []
     penalite = 0.0
 
@@ -52,10 +72,11 @@ def evaluer_style(titre: str, contenu: str, auteur: str | None) -> dict:
         signaux.append("aucun auteur identifiable")
         penalite += 20.0
 
-    a_une_citation = bool(re.search(r'"[^"]{10,}"|«[^»]{10,}»', contenu))
-    if not a_une_citation:
-        signaux.append("aucune citation ou source nommée détectée")
-        penalite += 15.0
+    if len(contenu.strip()) >= LONGUEUR_MIN_POUR_CITATION:
+        a_une_citation = bool(re.search(r'"[^"]{10,}"|«[^»]{10,}»', contenu))
+        if not a_une_citation:
+            signaux.append("aucune citation ou source nommée détectée")
+            penalite += 15.0
 
     if titre.count("!") + titre.count("?") >= 2 or re.search(r"[!?]{2,}", titre):
         signaux.append("ponctuation excessive dans le titre")

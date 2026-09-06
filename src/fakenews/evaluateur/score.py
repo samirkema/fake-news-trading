@@ -1,6 +1,12 @@
 """US-08 évaluateur : agrégation des sous-scores US-01 à US-07 en un score composite
 final 0-100 (cf. doc/userstories_évaluateur.md, doc/architecture.md interface evaluer(article))."""
 
+# `corroboration` et `decalage_viral` ne sont produits par aucun code aujourd'hui
+# (US-02 et US-06, bloqués sur la brique de clustering). Ils restent au barème :
+# US-08 fixe explicitement les sept poids de départ, et un signal absent de
+# `sous_scores` ne contribue à rien — leur présence ici ne fausse aucun calcul.
+# Signalés par l'audit (finding L5) comme configuration morte : conservés en
+# connaissance de cause, pas par oubli.
 POIDS_PAR_DEFAUT = {
     "reputation": 1.0,
     "corroboration": 1.0,

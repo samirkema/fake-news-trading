@@ -1,13 +1,24 @@
-sqlalchemy>=2.0
-psycopg2-binary>=2.9
-python-dotenv>=1.0
-feedparser>=6.0
-praw>=7.7
-pytest>=8.0
-fastapi>=0.110
-jinja2>=3.1
-uvicorn>=0.29
-httpx>=0.27
-anthropic>=0.40
-spacy>=3.7
-python-multipart>=0.0.9
+# Dépendances du pipeline batch (scraper / évaluateur / contextualiseur) et des tests.
+# Le frontend déployé sur Vercel N'UTILISE PAS ce fichier : il a le sien,
+# api/requirements.txt, volontairement réduit (cf. audit, SRE — spacy, praw,
+# feedparser, anthropic et pytest n'ont rien à faire dans une lambda de lecture).
+#
+# Bornes hautes explicites : sans elles, deux exécutions du même commit peuvent
+# embarquer des versions majeures différentes (cf. audit, Supply Chain).
+
+sqlalchemy>=2.0,<3.0
+psycopg2-binary>=2.9,<3.0
+python-dotenv>=1.0,<2.0
+feedparser>=6.0,<7.0
+praw>=7.7,<8.0
+pytest>=8.0,<9.0
+fastapi>=0.110,<1.0
+jinja2>=3.1,<4.0
+uvicorn>=0.29,<1.0
+httpx>=0.27,<1.0
+anthropic>=0.40,<1.0
+spacy>=3.7,<4.0
+python-multipart>=0.0.9,<1.0
+
+# Modèle NER en_core_web_sm : installé séparément et épinglé (cf. .github/workflows/
+# et README). Il ne s'installe pas via un `pip install` classique depuis PyPI.

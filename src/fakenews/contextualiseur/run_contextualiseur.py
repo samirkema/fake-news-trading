@@ -45,12 +45,23 @@ def traiter_selection(session: Session, selection: list[dict], client=None) -> i
     doc/architecture.md, dégrader jamais bloquer)."""
     nb_generes = 0
     for item in selection:
-        article = session.get(Article, item["article_id"])
-        score = session.execute(select(Score).where(Score.article_id == article.id)).scalar_one()
+        # Récupération DANS le try : elle en était sortie, si bien qu'un article
+        # supprimé entre la sélection et le traitement faisait tomber tout le run —
+        # exactement ce que la docstring ci-dessus promet d'éviter (finding L6).
         try:
+            article = session.get(Article, item["article_id"])
+            if article is None:
+                logger.warning("article %s introuvable — ignoré.", item["article_id"])
+                continue
+            score = session.execute(
+                select(Score).where(Score.article_id == article.id)
+            ).scalar_one()
             resultat = generer_mise_en_contexte(article.titre, article.contenu, score.sous_scores, client=client)
         except Exception as exc:
-            logger.warning("génération de mise en contexte échouée pour l'article %s : %s", article.id, exc)
+            logger.warning(
+                "génération de mise en contexte échouée pour l'article %s : %s",
+                item["article_id"], exc,
+            )
             continue
 
         enregistrer_mise_en_contexte(

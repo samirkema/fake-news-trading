@@ -11,7 +11,7 @@ import logging
 import os
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from fakenews.db import SessionLocal
@@ -29,15 +29,43 @@ logger = logging.getLogger(__name__)
 
 PLAFOND_APPELS_LLM_PAR_DEFAUT = 50
 
+# Plafond d'articles traités par run. Chaque article déclenche 2 à 3 appels réseau
+# synchrones à 10 s de timeout : sans borne, un backlog de plusieurs centaines
+# d'articles fait un run de plusieurs heures, exposé au timeout GitHub Actions
+# (cf. audit, finding M9). Le reliquat est traité au run suivant — les articles
+# non scorés restent sélectionnés tant qu'ils n'ont pas de Score.
+PLAFOND_ARTICLES_PAR_DEFAUT = 300
 
-def evaluer_articles_non_scores(session: Session, plafond_llm: int = PLAFOND_APPELS_LLM_PAR_DEFAUT) -> int:
+
+def evaluer_articles_non_scores(
+    session: Session,
+    plafond_llm: int = PLAFOND_APPELS_LLM_PAR_DEFAUT,
+    plafond_articles: int = PLAFOND_ARTICLES_PAR_DEFAUT,
+) -> int:
+    restants = session.execute(
+        select(func.count())
+        .select_from(Article)
+        .outerjoin(Score, Score.article_id == Article.id)
+        .where(Score.id.is_(None))
+    ).scalar_one()
     articles = (
         session.execute(
-            select(Article).outerjoin(Score, Score.article_id == Article.id).where(Score.id.is_(None))
+            select(Article)
+            .outerjoin(Score, Score.article_id == Article.id)
+            .where(Score.id.is_(None))
+            # Les plus récents d'abord : un backlog qui déborde doit livrer
+            # l'actualité de la semaine, pas des articles périmés.
+            .order_by(Article.date_publication.desc(), Article.id)
+            .limit(plafond_articles)
         )
         .scalars()
         .all()
     )
+    if restants > len(articles):
+        logger.warning(
+            "%d article(s) non scoré(s) pour un plafond de %d — %d reporté(s) au prochain run.",
+            restants, plafond_articles, restants - len(articles),
+        )
 
     # Client créé une seule fois pour tout le run (pas par article) : si les
     # identifiants sont absents/invalides, on le sait dès le début et on dégrade
@@ -79,13 +107,19 @@ def evaluer_articles_non_scores(session: Session, plafond_llm: int = PLAFOND_APP
                 nb_appels_llm += 1
 
             resultat = calculer_score_composite(sous_scores, POIDS_PAR_DEFAUT)
-            poids_utilises = {signal: POIDS_PAR_DEFAUT[signal] for signal in sous_scores}
+            # `.get` et non indexation directe : un signal ajouté sans entrée au
+            # barème levait un KeyError ici alors que score.py le tolère à 0.0
+            # (cf. audit, finding L4). Un seul comportement pour un seul concept.
+            poids_utilises = {signal: POIDS_PAR_DEFAUT.get(signal, 0.0) for signal in sous_scores}
 
             session.add(
                 Score(
                     article_id=article.id,
                     sous_scores=sous_scores,
                     poids=poids_utilises,
+                    # US-08 exige la trace de la contribution de chaque signal ;
+                    # elle était calculée puis jetée (cf. audit, finding M4).
+                    detail_calcul=resultat["detail"],
                     score_final=resultat["score_final"],
                     non_evaluable=resultat["non_evaluable"],
                 )
@@ -101,8 +135,13 @@ def evaluer_articles_non_scores(session: Session, plafond_llm: int = PLAFOND_APP
 
 def main():
     plafond = int(os.environ.get("LLM_PLAFOND_EVALUATEUR", PLAFOND_APPELS_LLM_PAR_DEFAUT))
+    plafond_articles = int(
+        os.environ.get("EVALUATEUR_PLAFOND_ARTICLES", PLAFOND_ARTICLES_PAR_DEFAUT)
+    )
     with SessionLocal() as session:
-        evaluer_articles_non_scores(session, plafond_llm=plafond)
+        evaluer_articles_non_scores(
+            session, plafond_llm=plafond, plafond_articles=plafond_articles
+        )
 
 
 if __name__ == "__main__":

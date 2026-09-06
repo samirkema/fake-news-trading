@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fakenews"
+version = "0.1.0"
+description = "Détection de fake news et score de suspicion (prototype)"
+requires-python = ">=3.12"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# Remplace les trois mécanismes concurrents qui résolvaient `src/` jusqu'ici
+# (PYTHONPATH dans chaque workflow, sys.path.insert dans tests/conftest.py, et un
+# second dans api/index.py) — cf. audit, Layer Enforcer. Le hack de api/index.py
+# reste nécessaire : le runtime Vercel n'installe pas le paquet.
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+# --strict-markers : un marqueur inconnu devient une erreur, pas un skip silencieux.
+addopts = "--strict-markers -ra"

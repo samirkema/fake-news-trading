@@ -24,9 +24,13 @@ jobs:
       - run: pip install -r requirements.txt
 
       # Modèle spaCy pour l'extraction d'entreprises (US-04 évaluateur, source
-      # primaire) — pas dans requirements.txt (les modèles spaCy s'installent via cette
-      # commande dédiée, pas via pip install classique).
-      - run: python -m spacy download en_core_web_sm
+      # primaire) — pas dans requirements.txt (les modèles spaCy ne s'installent pas
+      # via un pip install classique depuis PyPI).
+      #
+      # Version ÉPINGLÉE (cf. audit, Supply Chain) : `spacy download` prenait la
+      # dernière version compatible, donc la sortie de US-04 pouvait changer d'un
+      # run à l'autre sans le moindre commit.
+      - run: pip install "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
 
       # Scraper (US-06 scraper) : RSS + Reddit. Identifiants Reddit scopés à ce seul
       # step (cf. audit de suivi) — évaluateur et contextualiseur n'en ont pas besoin.

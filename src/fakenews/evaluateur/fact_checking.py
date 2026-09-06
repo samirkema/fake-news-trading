@@ -68,10 +68,15 @@ def evaluer_fact_checking(titre: str, cle_api: str | None = None, client: httpx.
                         "preuve_id": f"fact_checking:{url}" if url else "fact_checking",
                     }
     except Exception as exc:
+        # `raison` est persistée dans scores.sous_scores PUIS rendue dans le
+        # frontend (templates/detail.html). Interpoler `exc` brut y recopiait la
+        # clé API : httpx met l'URL complète — `?key=...` compris — dans le message
+        # de HTTPStatusError (cf. audit, finding H2). Seul le type est conservé ;
+        # le détail complet reste dans le log, où GitHub masque les secrets.
         logger.warning("appel Google Fact Check Tools échoué ou réponse malformée : %s", exc)
         return {
             "valeur": None,
-            "raison": f"fact-checking indisponible ({exc})",
+            "raison": f"fact-checking indisponible ({type(exc).__name__})",
             "preuve_id": "fact_checking",
         }
     finally:
