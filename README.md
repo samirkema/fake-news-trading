@@ -36,7 +36,7 @@ Détails complets : [doc/V0/architecture.md](doc/V0/architecture.md) et [doc/V0/
 - **Automatisation** : les trois premiers blocs sont orchestrés en un workflow GitHub Actions (`.github/workflows/pipeline_hebdomadaire.yml`). ⚠️ **Le déclenchement automatique est actuellement désactivé** (projet en pause : le `schedule` est commenté pour ne pas consommer la clé Anthropic). Le workflow ne tourne que sur déclenchement manuel — les données ne se rafraîchissent donc pas toutes seules.
 - **CI** : `.github/workflows/ci.yml` lance la suite de tests sur chaque push et chaque PR, contre un vrai Postgres avec les migrations appliquées, et échoue si un test est skippé.
 
-Historique des audits menés sur ce projet : [audit/](audit/).
+Historique des audits menés sur ce projet : [doc/audit/](doc/audit/).
 
 ## Installation
 
@@ -80,7 +80,7 @@ pytest -v
 
 Sans `TEST_DATABASE_URL`, les tests purs tournent quand même et les tests contre une vraie base sont ignorés (`skip`). **Ce n'est pas un mode acceptable pour valider une modification** : ces skips représentaient 43 % de la suite (toute l'authentification, tout le frontend, toute la persistance) et donnaient un vert trompeur. La CI définit toujours `TEST_DATABASE_URL` et échoue si un test est skippé.
 
-**Ne pas réutiliser une base de développement contenant déjà des données réelles** pour `TEST_DATABASE_URL` — utiliser une base dédiée et vide (cf. [audit/audit-phase5-automatisation.md](audit/audit-phase5-automatisation.md) pour le pourquoi).
+**Ne pas réutiliser une base de développement contenant déjà des données réelles** pour `TEST_DATABASE_URL` — utiliser une base dédiée et vide (cf. [audit/audit-phase5-automatisation.md](doc/audit/audit-phase5-automatisation.md) pour le pourquoi).
 
 ## Lancer chaque bloc localement
 
@@ -110,7 +110,7 @@ Détails : [doc/V0/architecture.md](doc/V0/architecture.md), section "Topologie 
 - [doc/V0/architecture.md](doc/V0/architecture.md) — décisions d'architecture et leurs justifications
 - [doc/V0/plan_implementation.md](doc/V0/plan_implementation.md) — séquencement et état d'avancement
 - [doc/V0/userstories_scraper.md](doc/V0/userstories_scraper.md), [doc/V0/userstories_évaluateur.md](doc/V0/userstories_évaluateur.md), [doc/V0/userstories_contextualiseur.md](doc/V0/userstories_contextualiseur.md), [doc/V0/userstories_frontend.md](doc/V0/userstories_frontend.md) — user stories détaillées par bloc
-- [audit/](audit/) — audits de suivi (qualité, sécurité, conformité aux exigences)
+- [doc/audit/](doc/audit/) — audits de suivi (qualité, sécurité, conformité aux exigences), du plus ancien au plus récent
 
 ## Licence
 

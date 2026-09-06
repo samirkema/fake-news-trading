@@ -59,7 +59,7 @@ def test_meme_hash_meme_domaine_est_un_doublon(db_session):
 
 
 def test_meme_hash_domaine_different_n_est_pas_un_doublon(db_session):
-    # Reproduit et corrige le bug d'audit MET-1 (audit/audit-phase1-fin-phase2-debut.md) :
+    # Reproduit et corrige le bug d'audit MET-1 (doc/audit/audit-phase1-fin-phase2-debut.md) :
     # une dépêche republiée par un domaine différent est une corroboration à conserver,
     # pas un doublon à fusionner.
     enregistrer_ou_mettre_a_jour(

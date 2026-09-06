@@ -1,6 +1,6 @@
 # Audit de suivi — Fin Phase 1 (scraper) + Début Phase 2 (évaluateur)
 
-**Sujet** : delta depuis `audit/audit-phase0-phase1-us01.md` — US-02/US-05/US-06 scraper, US-08/US-01 évaluateur, refactor normalisation/persistance, 31 nouveaux tests.
+**Sujet** : delta depuis `doc/audit/audit-phase0-phase1-us01.md` — US-02/US-05/US-06 scraper, US-08/US-01 évaluateur, refactor normalisation/persistance, 31 nouveaux tests.
 **Date** : 2026-08-04.
 **Scope exclu (délibérément, à ne pas compter comme manquant)** : US-03 scraper (GDELT), US-02 à US-07 évaluateur (sauf US-01), Phases 3/4/5 (contextualiseur, frontend, orchestration bout en bout).
 
