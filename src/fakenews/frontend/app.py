@@ -241,6 +241,12 @@ def _identifiant_client(request: Request) -> str:
     proxys de confiance, l'adresse du visiteur est le N-ième maillon en partant
     de la fin. Tout ce qui précède a été écrit par le client et ne vaut rien.
 
+    Sur Vercel — la cible de déploiement du projet — la valeur est 1. La
+    plateforme ne se contente pas d'ajouter un maillon : elle ÉCRASE l'en-tête,
+    « to prevent IP spoofing », et n'y laisse que l'IP publique réelle
+    (https://vercel.com/docs/headers/request-headers). Un seul maillon, digne de
+    confiance : `maillons[-1]`.
+
     Sans déclaration, on retombe sur le pair TCP. Derrière un proxy, cela signifie
     un compteur partagé par tous les visiteurs — ce qui reste sans danger pour la
     disponibilité, puisqu'une authentification RÉUSSIE n'est jamais plafonnée

@@ -59,6 +59,7 @@ Copier `.env.example` en `.env` et renseigner :
 - `GOOGLE_FACT_CHECK_API_KEY` — optionnel, US-03 évaluateur dégrade proprement si absente
 - `FRONTEND_PASSWORD` — mot de passe partagé, obligatoire en déploiement hébergé. **Non défini = accès refusé**, pas « accès libre » : le défaut est fermé. À la connexion l'utilisateur saisit aussi un pseudo qui détermine son rôle via la table `comptes` (fondation V1, voir [doc/V1/comptes-3-roles.md](doc/V1/comptes-3-roles.md))
 - `FAKENEWS_MODE=local` — développement uniquement, désactive l'authentification du frontend. À ne jamais définir en hébergé
+- `FAKENEWS_PROXYS_DE_CONFIANCE` — nombre de proxys devant l'application, pour le plafond anti-bruteforce de `/login`. **`1` sur Vercel** ; non définie ailleurs tant que la topologie n'a pas été constatée (`X-Forwarded-For` est alors ignoré, ce qui est le défaut sûr)
 
 Appliquer le schéma de base de données (migrations dans l'ordre) :
 

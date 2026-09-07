@@ -85,7 +85,10 @@ update comptes
     Le lire sans condition rendait le plafond entièrement contournable (mesuré :
     50 tentatives avec en-tête tournant, 0 refus). Il n'est pris en compte que si
     `FAKENEWS_PROXYS_DE_CONFIANCE` déclare combien de proxys se trouvent devant
-    l'application (cf. `.env.example`).
+    l'application. **Sur Vercel, cette valeur est 1** : la plateforme écrase
+    `X-Forwarded-For` au lieu d'y ajouter un maillon, précisément « to prevent IP
+    spoofing » ([doc Vercel](https://vercel.com/docs/headers/request-headers)), et
+    n'y laisse que l'IP publique réelle du visiteur.
 - `POST /login` : si le pseudo a un `secret_hash`, le mot de passe est vérifié
   contre ce hash (`crypt()` côté Postgres) ; sinon contre `FRONTEND_PASSWORD`.
 - Cookie de session : `pseudo:expiration:HMAC(clé, "fakenews-session:" + pseudo + ":" + expiration)`
