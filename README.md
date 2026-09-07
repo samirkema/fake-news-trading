@@ -101,7 +101,20 @@ FAKENEWS_MODE=local uvicorn fakenews.frontend.app:app --reload   # http://localh
 
 - **Stockage** : Supabase (PostgreSQL managé).
 - **Pipeline hebdomadaire** : GitHub Actions (`.github/workflows/pipeline_hebdomadaire.yml`). Le `schedule` du lundi est **commenté** (projet en pause) : seul le déclenchement manuel fonctionne. Secrets à configurer dans *Settings → Secrets and variables → Actions* du dépôt.
-- **Frontend** : Vercel (`vercel.json` + `api/index.py`), lecture seule.
+- **Frontend** : Vercel (`vercel.json` + `api/index.py`), lecture seule. Variables à définir dans *Settings → Environment Variables* du projet Vercel : `DATABASE_URL`, `FRONTEND_PASSWORD`, et `FAKENEWS_PROXYS_DE_CONFIANCE=1` (cf. [Installation](#installation)). Ne **jamais** y définir `FAKENEWS_MODE`.
+
+### Ordre de déploiement : les migrations d'abord
+
+**Appliquer les migrations avant de déployer le code, toujours.** Les deux partent par des canaux séparés — le code par `git push`, le schéma à la main — et rien ne les synchronise. L'écart n'a pas le même coût dans les deux sens :
+
+| Situation | Conséquence |
+|---|---|
+| Schéma en avance sur le code | inoffensif — l'ancien code ignore ce qu'il ne déclare pas |
+| **Code en avance sur le schéma** | **panne totale** — toute page lisant des scores renvoie 500 |
+
+Depuis l'audit de phase 9, le second cas échoue au démarrage avec un message nommant la colonne manquante (`fakenews.schema`) plutôt que par une erreur SQL opaque sur chaque page. Le garde-fou rend l'erreur visible ; il ne dispense pas de l'ordre.
+
+À savoir aussi : déployer une version qui change le format du cookie de session **déconnecte tout le monde**. C'est le cas du passage au format `pseudo:expiration:signature` — les sessions ouvertes redirigent vers `/login`, il suffit de se reconnecter.
 
 Détails : [doc/V0/architecture.md](doc/V0/architecture.md), section "Topologie de déploiement".
 

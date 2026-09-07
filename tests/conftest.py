@@ -41,13 +41,19 @@ def _environnement_neutre(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _pas_de_reseau(monkeypatch, request):
-    """Interdit toute connexion sortante non locale pendant les tests.
+    """Interdit les connexions sortantes non locales ouvertes depuis Python.
 
     Rien ne l'empêchait : `test_le_detail_du_calcul_est_persiste` appelle le vrai
     `evaluer_articles_non_scores`, et il ne sortait sur le réseau que parce
     qu'aucun titre de test ne cite une entreprise de la table. Un titre malheureux
     suffisait à faire appeler la vraie API SEC depuis la CI (cf. audit phase 7,
     finding N9).
+
+    Couverture vérifiée : `socket.create_connection`, `httpx` et `urllib` sont
+    bien bloqués. NE COUVRE PAS psycopg2/libpq, qui ouvre sa socket en C, hors de
+    portée d'un monkeypatch sur `socket.socket.connect` — un test pointant vers un
+    Postgres distant passerait (audit phase 8). La docstring disait « toute
+    connexion » : c'était une demi-vérité.
 
     Les doubles httpx (`MockTransport`) n'ouvrent pas de socket et ne sont donc pas
     concernés. Un test qui aurait légitimement besoin du réseau peut lever la garde

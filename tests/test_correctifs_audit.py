@@ -4,6 +4,7 @@ Un finding sans test qui le tue revient tôt ou tard. Chaque test ci-dessous por
 en commentaire le finding qu'il verrouille.
 """
 
+import pathlib
 import time
 
 import httpx
@@ -162,10 +163,11 @@ def test_le_plafond_ne_ferme_jamais_la_porte_a_qui_a_le_bon_mot_de_passe(client,
     assert client.get("/").status_code == 200
 
 
-def _marteler(client, nombre, entete=None):
-    """`nombre` tentatives ratées, éventuellement avec un X-Forwarded-For donné."""
+def _marteler(client, entetes):
+    """Une tentative ratée par valeur de `X-Forwarded-For` fournie (None = aucun
+    en-tête). Retourne la liste des codes HTTP."""
     reponses = []
-    for valeur in entete or [None] * nombre:
+    for valeur in entetes:
         entetes = {"X-Forwarded-For": valeur} if valeur else {}
         reponses.append(
             client.post(
@@ -185,7 +187,7 @@ def test_x_forwarded_for_est_ignore_par_defaut(client, monkeypatch, mode_heberge
     mode_heberge("secret")
     monkeypatch.delenv(NOM_ENV_PROXYS, raising=False)
 
-    codes = _marteler(client, 0, entete=[f"198.51.100.{i}" for i in range(LOGIN_TENTATIVES_MAX + 5)])
+    codes = _marteler(client, [f"198.51.100.{i}" for i in range(LOGIN_TENTATIVES_MAX + 5)])
 
     assert 429 in codes, (
         "faire tourner X-Forwarded-For ne doit pas ouvrir un compteur neuf à chaque "
@@ -199,7 +201,7 @@ def test_rotation_de_x_forwarded_for_ne_contourne_pas_le_plafond(client, monkeyp
     mode_heberge("secret")
     monkeypatch.delenv(NOM_ENV_PROXYS, raising=False)
 
-    codes = _marteler(client, 0, entete=[f"198.51.100.{i % 250}" for i in range(50)])
+    codes = _marteler(client, [f"198.51.100.{i % 250}" for i in range(50)])
 
     assert codes.count(429) >= 50 - LOGIN_TENTATIVES_MAX - 1
 
@@ -212,11 +214,11 @@ def test_x_forwarded_for_est_lu_quand_un_proxy_de_confiance_est_declare(
     mode_heberge("secret")
     monkeypatch.setenv(NOM_ENV_PROXYS, "1")
 
-    codes = _marteler(client, 0, entete=["198.51.100.9"] * (LOGIN_TENTATIVES_MAX + 1))
+    codes = _marteler(client, ["198.51.100.9"] * (LOGIN_TENTATIVES_MAX + 1))
     assert codes[-1] == 429
 
     # Un autre visiteur, derrière le même proxy, garde son propre compteur.
-    autre = _marteler(client, 0, entete=["203.0.113.4"])
+    autre = _marteler(client, ["203.0.113.4"])
     assert autre == [401]
 
 
@@ -231,10 +233,47 @@ def test_maillons_forges_avant_le_proxy_de_confiance_sont_ignores(
 
     codes = _marteler(
         client,
-        0,
-        entete=[f"10.{i}.{i}.{i}, 198.51.100.9" for i in range(LOGIN_TENTATIVES_MAX + 2)],
+        [f"10.{i}.{i}.{i}, 198.51.100.9" for i in range(LOGIN_TENTATIVES_MAX + 2)],
     )
     assert codes[-1] == 429, "les maillons écrits par le client ne doivent pas créer de compteurs"
+
+
+def test_le_template_env_n_active_pas_la_valeur_vercel():
+    """`.env.example` se copie en `.env` pour le développement local, où il n'y a
+    aucun proxy. Y livrer FAKENEWS_PROXYS_DE_CONFIANCE=1 — valeur correcte sur
+    Vercel — faisait lire un en-tête écrit par le client et rouvrait le
+    contournement du plafond : 50 tentatives à en-tête tournant, 0 refus
+    (audit phase 9). La variable doit rester commentée dans le template."""
+    modele = (pathlib.Path(__file__).resolve().parents[1] / ".env.example").read_text()
+    actives = [
+        ligne
+        for ligne in modele.splitlines()
+        if ligne.strip().startswith("FAKENEWS_PROXYS_DE_CONFIANCE")
+    ]
+    assert not actives, (
+        "FAKENEWS_PROXYS_DE_CONFIANCE ne doit pas être actif dans .env.example : "
+        f"c'est une valeur propre à Vercel. Lignes fautives : {actives}"
+    )
+
+
+def test_hops_declare_sans_proxy_reel_laisse_le_client_choisir_son_identite(
+    client, monkeypatch, mode_heberge
+):
+    """Documente le danger que le test précédent prévient.
+
+    Ce n'est pas un bug du code : avec un proxy déclaré, lire l'en-tête est le
+    comportement voulu. C'est la CONFIGURATION qui doit être juste. Aucun test ne
+    couvrait ce désaccord entre déclaration et topologie réelle, et c'est
+    exactement par là que la valeur du template est passée (audit phase 9)."""
+    mode_heberge("secret")
+    monkeypatch.setenv(NOM_ENV_PROXYS, "1")  # déclaré, mais aucun proxy en face
+
+    codes = _marteler(client, [f"198.51.100.{i}" for i in range(LOGIN_TENTATIVES_MAX + 5)])
+
+    assert 429 not in codes, (
+        "comportement attendu et dangereux : hops déclaré sans proxy réel rend le "
+        "plafond contournable — d'où l'obligation de ne pas livrer la valeur active"
+    )
 
 
 def test_une_valeur_de_proxy_invalide_retombe_sur_le_pair_tcp(client, monkeypatch, mode_heberge):
@@ -243,7 +282,7 @@ def test_une_valeur_de_proxy_invalide_retombe_sur_le_pair_tcp(client, monkeypatc
     mode_heberge("secret")
     monkeypatch.setenv(NOM_ENV_PROXYS, "beaucoup")
 
-    codes = _marteler(client, 0, entete=[f"198.51.100.{i}" for i in range(LOGIN_TENTATIVES_MAX + 2)])
+    codes = _marteler(client, [f"198.51.100.{i}" for i in range(LOGIN_TENTATIVES_MAX + 2)])
     assert 429 in codes
 
 
@@ -481,3 +520,46 @@ def test_les_pages_ont_des_titres_distincts(client, db_session, monkeypatch):
 
     assert "<title>Articles suspects" in client.get("/").text
     assert "<title>Un titre bien reconnaissable" in client.get(f"/articles/{article.id}").text
+
+
+# --------------------------------------------------------------------------
+# Audit phase 9 (High) — le schéma et le code sont déployés séparément
+# --------------------------------------------------------------------------
+
+
+def test_le_garde_fou_de_schema_ne_dit_rien_quand_la_base_est_a_jour(db_session):
+    from fakenews.schema import colonnes_manquantes, verifier_schema
+
+    moteur = db_session.get_bind()
+    assert colonnes_manquantes(moteur) == {}
+    verifier_schema(moteur)  # ne doit rien lever
+
+
+def test_le_garde_fou_de_schema_nomme_la_colonne_manquante(db_session):
+    """Sans lui, un code déployé en avance sur sa migration renvoyait un
+    `ProgrammingError` opaque sur chaque page lisant des scores — vérifié par
+    exécution pendant l'audit. Ici on retire la colonne dans un savepoint pour
+    reproduire exactement cet état."""
+    from fakenews.schema import SchemaIncomplet, verifier_schema
+
+    moteur = db_session.get_bind()
+    with db_session.begin_nested():
+        db_session.execute(text("alter table scores drop column detail_calcul"))
+        with pytest.raises(SchemaIncomplet) as erreur:
+            verifier_schema(moteur)
+
+    message = str(erreur.value)
+    assert "scores" in message and "detail_calcul" in message
+    assert "supabase/migrations/" in message, "le message doit dire quoi faire"
+
+
+def test_le_garde_fou_de_schema_ne_cree_pas_de_nouveau_mode_de_panne():
+    """Si l'introspection échoue, on journalise et on laisse passer : ce contrôle
+    diagnostique une erreur de déploiement, il ne doit pas en devenir une."""
+    from fakenews.schema import verifier_schema
+
+    class MoteurCasse:
+        def __getattr__(self, nom):
+            raise RuntimeError("base injoignable")
+
+    verifier_schema(MoteurCasse())  # ne doit rien lever

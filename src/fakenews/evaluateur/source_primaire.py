@@ -189,23 +189,28 @@ TERMES_RECHERCHE_MIN = 1
 # vérifiable » (cf. audit phase 7, finding N4). Un chiffre ne compte désormais que
 # s'il est QUANTIFIÉ — devise, pourcentage, ordre de grandeur, ou nombre assez
 # grand pour ne pas être une date ni un compteur d'interface.
+# Radicaux, pas formes exactes : « rappelle », « annonçant » ou « acquiring » sont
+# des annonces au même titre que « rappel » ou « announce ». L'énumération de formes
+# fléchies en ratait la moitié, ce qui obligeait à compenser par une règle sur les
+# nombres — laquelle prenait un code postal pour un chiffre d'affaires
+# (audit phase 9, finding Q10).
 _MOTIF_VERBE_ANNONCE = (
-    r"announce|announces|announced|announcement|report|reports|reported|"
-    r"file|files|filed|filing|acquire|acquires|acquired|acquisition|merger|merge|"
-    r"recall|recalls|lawsuit|dividend|earnings|guidance|buyback|layoff|layoffs|"
-    r"bankruptcy|resign|resigns|resigned|appoint|appoints|approves|approved|"
-    r"annonce|annonces|annoncé|annoncée|rachat|fusion|rappel|résultats|resultats|"
-    r"bénéfice|benefice|dividende|licenciement|licenciements|démission|demission|"
-    r"faillite|nomination|autorise|autorisé"
+    r"announc\w*|report\w*|fil(?:e\w*|ing)|acquir\w*|acquisition\w*|merg\w*|"
+    r"recall\w*|lawsuit\w*|dividend\w*|earning\w*|guidance|buyback\w*|layoff\w*|"
+    r"bankruptc\w*|resign\w*|appoint\w*|approv\w*|"
+    r"annonc\w*|rachat\w*|fusion\w*|rappel\w*|résultat\w*|resultat\w*|"
+    r"bénéfice\w*|benefice\w*|dividende\w*|licenciement\w*|démission\w*|demission\w*|"
+    r"faillite\w*|nomination\w*|autoris\w*"
 )
 _MARQUEURS_CLAIM = re.compile(
     # une somme ou un pourcentage : « 0,25 $ », « 12 % », « $4.5bn »
     r"[$€£]\s?\d|\d\s?[$€£%]|\d\s?(?:pour cent|percent)\b"
     # un ordre de grandeur explicite : « 900 billion », « 3 milliards »
     r"|\d[\d.,\s]*\s?(?:million|millions|billion|billions|milliard|milliards|bn|md)\b"
-    # un nombre à 5 chiffres ou plus : trop grand pour un millésime (2026) ou un
-    # compteur d'interface (42 commentaires), donc porteur d'information
-    r"|\b\d{5,}\b"
+    # Pas de règle sur les nombres « assez grands » : elle qualifiait un code
+    # postal (94043), une référence (100234) ou un identifiant de post (123456)
+    # de fait précis et vérifiable. Les radicaux de verbes ci-dessous couvrent les
+    # vraies annonces, y compris « Tesla rappelle 12000 Model Y ».
     # une annonce, une décision, une démission…
     rf"|\b(?:{_MOTIF_VERBE_ANNONCE})\b",
     re.IGNORECASE,
