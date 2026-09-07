@@ -6,11 +6,21 @@ name: CI
 # localement était un faux vert. Ce job fournit un vrai Postgres, y applique les
 # migrations, et échoue si le nombre de tests skippés dépasse le budget attendu.
 
+# Toutes les branches, pas seulement main. Restreint à `main`, ce workflow ne
+# partait qu'APRÈS la fusion — trop tard pour le garde-fou qu'il est censé être :
+# six commits de correctifs ont été poussés sans qu'aucune validation automatique
+# ne les voie. Un workflow qui valide après coup ne valide rien.
 "on":
   push:
-    branches: [main]
   pull_request:
   workflow_dispatch: {}
+
+# Un push suivi d'un autre sur la même branche annule le run devenu inutile ;
+# `push` + `pull_request` ensemble déclenchent aussi deux runs sur une PR interne,
+# dont un seul survit ici.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   tests:
