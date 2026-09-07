@@ -14,11 +14,11 @@ from sqlalchemy import func, select, text
 from fakenews.contextualiseur.generation import SYSTEM as SYSTEM_GENERATION
 from fakenews.evaluateur.fact_checking import evaluer_fact_checking
 from fakenews.evaluateur.llm_bootstrap import SYSTEM as SYSTEM_BOOTSTRAP
-from fakenews.evaluateur.score import POIDS_PAR_DEFAUT, calculer_score_composite
 from fakenews.evaluateur.style import evaluer_style
 from fakenews.frontend.app import (
     LOGIN_TENTATIVES_MAX,
     NOM_COOKIE,
+    NOM_ENV_PROXYS,
     AccesRefuse,
     _tentatives_login,
     _valeur_cookie,
@@ -162,30 +162,89 @@ def test_le_plafond_ne_ferme_jamais_la_porte_a_qui_a_le_bon_mot_de_passe(client,
     assert client.get("/").status_code == 200
 
 
-def test_l_identifiant_client_suit_l_en_tete_de_transfert(client, monkeypatch, mode_heberge):
-    """Derrière un proxy, `request.client.host` est l'adresse du proxy : sans lire
-    `X-Forwarded-For`, tous les visiteurs partageaient un unique compteur."""
-    mode_heberge("secret")
-    for _ in range(LOGIN_TENTATIVES_MAX + 1):
-        client.post(
-            "/login",
-            data={"pseudo": "alice", "mot_de_passe": "faux"},
-            headers={"X-Forwarded-For": "198.51.100.9"},
+def _marteler(client, nombre, entete=None):
+    """`nombre` tentatives ratées, éventuellement avec un X-Forwarded-For donné."""
+    reponses = []
+    for valeur in entete or [None] * nombre:
+        entetes = {"X-Forwarded-For": valeur} if valeur else {}
+        reponses.append(
+            client.post(
+                "/login", data={"pseudo": "a", "mot_de_passe": "faux"}, headers=entetes
+            ).status_code
         )
-    bloque = client.post(
-        "/login",
-        data={"pseudo": "alice", "mot_de_passe": "faux"},
-        headers={"X-Forwarded-For": "198.51.100.9"},
+    return reponses
+
+
+def test_x_forwarded_for_est_ignore_par_defaut(client, monkeypatch, mode_heberge):
+    """Le test précédent affirmait l'inverse — il CERTIFIAIT que chaque
+    `X-Forwarded-For` obtient son propre compteur, c'est-à-dire exactement le
+    mécanisme qui rendait le plafond contournable (cf. audit phase 8).
+
+    Sans proxy de confiance déclaré, l'en-tête ne doit avoir aucun effet : il est
+    écrit par le client."""
+    mode_heberge("secret")
+    monkeypatch.delenv(NOM_ENV_PROXYS, raising=False)
+
+    codes = _marteler(client, 0, entete=[f"198.51.100.{i}" for i in range(LOGIN_TENTATIVES_MAX + 5)])
+
+    assert 429 in codes, (
+        "faire tourner X-Forwarded-For ne doit pas ouvrir un compteur neuf à chaque "
+        "requête : le plafond serait décoratif"
     )
-    assert bloque.status_code == 429
+
+
+def test_rotation_de_x_forwarded_for_ne_contourne_pas_le_plafond(client, monkeypatch, mode_heberge):
+    """Le scénario mesuré pendant l'audit : 50 tentatives avec en-tête tournant
+    produisaient 0 refus. Reproduit tel quel."""
+    mode_heberge("secret")
+    monkeypatch.delenv(NOM_ENV_PROXYS, raising=False)
+
+    codes = _marteler(client, 0, entete=[f"198.51.100.{i % 250}" for i in range(50)])
+
+    assert codes.count(429) >= 50 - LOGIN_TENTATIVES_MAX - 1
+
+
+def test_x_forwarded_for_est_lu_quand_un_proxy_de_confiance_est_declare(
+    client, monkeypatch, mode_heberge
+):
+    """Avec un proxy de confiance déclaré, le dernier maillon est celui que ce
+    proxy a posé : on retrouve un plafond par visiteur."""
+    mode_heberge("secret")
+    monkeypatch.setenv(NOM_ENV_PROXYS, "1")
+
+    codes = _marteler(client, 0, entete=["198.51.100.9"] * (LOGIN_TENTATIVES_MAX + 1))
+    assert codes[-1] == 429
 
     # Un autre visiteur, derrière le même proxy, garde son propre compteur.
-    autre = client.post(
-        "/login",
-        data={"pseudo": "alice", "mot_de_passe": "faux"},
-        headers={"X-Forwarded-For": "203.0.113.4"},
+    autre = _marteler(client, 0, entete=["203.0.113.4"])
+    assert autre == [401]
+
+
+def test_maillons_forges_avant_le_proxy_de_confiance_sont_ignores(
+    client, monkeypatch, mode_heberge
+):
+    """Un client qui pré-remplit l'en-tête ne peut pas se fabriquer une identité :
+    seul le maillon posé par le proxy de confiance compte. Ici le proxy ajoute
+    toujours `198.51.100.9` en queue, quoi que le client ait écrit devant."""
+    mode_heberge("secret")
+    monkeypatch.setenv(NOM_ENV_PROXYS, "1")
+
+    codes = _marteler(
+        client,
+        0,
+        entete=[f"10.{i}.{i}.{i}, 198.51.100.9" for i in range(LOGIN_TENTATIVES_MAX + 2)],
     )
-    assert autre.status_code == 401
+    assert codes[-1] == 429, "les maillons écrits par le client ne doivent pas créer de compteurs"
+
+
+def test_une_valeur_de_proxy_invalide_retombe_sur_le_pair_tcp(client, monkeypatch, mode_heberge):
+    """Une configuration illisible ne doit pas ouvrir la porte : on ignore
+    l'en-tête plutôt que de deviner."""
+    mode_heberge("secret")
+    monkeypatch.setenv(NOM_ENV_PROXYS, "beaucoup")
+
+    codes = _marteler(client, 0, entete=[f"198.51.100.{i}" for i in range(LOGIN_TENTATIVES_MAX + 2)])
+    assert 429 in codes
 
 
 def test_la_table_des_tentatives_reste_bornee():

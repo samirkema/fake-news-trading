@@ -77,6 +77,15 @@ update comptes
   - pseudo dans `comptes` → rôle associé ; sinon → `spectateur`.
 - `POST /login` est plafonné à 10 tentatives ratées par client sur 5 minutes.
   Ralentisseur, pas barrière : sur Vercel chaque instance a son propre compteur.
+  Deux propriétés à ne pas casser en y touchant :
+  - le plafond ne s'applique **qu'aux échecs** — un mot de passe correct ouvre la
+    session même compteur plein, sinon dix mauvaises tentatives fermeraient le
+    site à tous ceux qui connaissent le bon ;
+  - `X-Forwarded-For` est **ignoré par défaut**, car c'est le client qui l'écrit.
+    Le lire sans condition rendait le plafond entièrement contournable (mesuré :
+    50 tentatives avec en-tête tournant, 0 refus). Il n'est pris en compte que si
+    `FAKENEWS_PROXYS_DE_CONFIANCE` déclare combien de proxys se trouvent devant
+    l'application (cf. `.env.example`).
 - `POST /login` : si le pseudo a un `secret_hash`, le mot de passe est vérifié
   contre ce hash (`crypt()` côté Postgres) ; sinon contre `FRONTEND_PASSWORD`.
 - Cookie de session : `pseudo:expiration:HMAC(clé, "fakenews-session:" + pseudo + ":" + expiration)`

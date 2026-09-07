@@ -62,9 +62,16 @@ MODE_LOCAL = "local"
 LOGIN_TENTATIVES_MAX = 10
 LOGIN_FENETRE_SECONDES = 300
 # Borne dure sur le nombre de clients suivis, pour que la table ne puisse pas
-# grossir indéfiniment (audit phase 7, N5).
+# grossir indéfiniment (audit phase 7, N5). L'éviction est FIFO : `dict` conserve
+# l'ordre d'insertion, donc la première clé est la plus anciennement suivie —
+# O(1), là où un `min()` sur les horodatages coûtait O(n) à chaque échec sur un
+# endpoint public non authentifié (audit phase 8).
 LOGIN_CLIENTS_MAX = 10_000
 _tentatives_login: dict[str, deque] = {}
+
+# Nombre de proxys de confiance devant l'application. Non définie = aucun, donc
+# X-Forwarded-For ignoré (cf. _identifiant_client).
+NOM_ENV_PROXYS = "FAKENEWS_PROXYS_DE_CONFIANCE"
 
 # Pseudo : normalisé en minuscules. Jeu de caractères restreint car il est aussi
 # un segment de la valeur du cookie signé (« pseudo:expiration:signature ») — pas
@@ -155,11 +162,13 @@ def _purger_tentatives(maintenant: float) -> None:
     fenêtre. Sans elle, `_trop_de_tentatives` ne nettoyait que la clé qu'on lui
     présentait : 50 000 clients échouant une fois chacun laissaient 50 000 entrées
     permanentes (~43 Mo), mesuré (cf. audit phase 7, finding N5)."""
-    for identifiant in [
+    perimes = [
         cle
         for cle, tentatives in _tentatives_login.items()
+        # `not tentatives` d'abord : une file vide n'a pas de `[-1]`.
         if not tentatives or maintenant - tentatives[-1] > LOGIN_FENETRE_SECONDES
-    ]:
+    ]
+    for identifiant in perimes:
         _tentatives_login.pop(identifiant, None)
 
 
@@ -179,12 +188,15 @@ def _trop_de_tentatives(identifiant_client: str) -> bool:
 
 def _enregistrer_tentative_ratee(identifiant_client: str) -> None:
     maintenant = time.monotonic()
-    if len(_tentatives_login) >= LOGIN_CLIENTS_MAX:
+    if identifiant_client not in _tentatives_login and len(_tentatives_login) >= LOGIN_CLIENTS_MAX:
         _purger_tentatives(maintenant)
-        if len(_tentatives_login) >= LOGIN_CLIENTS_MAX:
-            # Toujours saturé après purge : on sacrifie le suivi le plus ancien
-            # plutôt que de laisser la table grossir indéfiniment.
-            _tentatives_login.pop(min(_tentatives_login, key=lambda c: _tentatives_login[c][-1]), None)
+        while len(_tentatives_login) >= LOGIN_CLIENTS_MAX:
+            # Toujours saturé après purge : on sacrifie le suivi le plus
+            # anciennement ouvert plutôt que de laisser la table grossir. `dict`
+            # garde l'ordre d'insertion, donc `next(iter(...))` est le plus ancien
+            # en O(1) — pas de `min()` sur toute la table à chaque échec, et pas
+            # d'accès à `deque[-1]` qui supposait la file non vide.
+            _tentatives_login.pop(next(iter(_tentatives_login)), None)
     _tentatives_login.setdefault(identifiant_client, deque()).append(maintenant)
 
 
@@ -192,27 +204,58 @@ def _oublier_tentatives(identifiant_client: str) -> None:
     _tentatives_login.pop(identifiant_client, None)
 
 
+def _proxys_de_confiance() -> int:
+    """Nombre de proxys de confiance placés devant l'application.
+
+    0 (défaut) = aucun : `X-Forwarded-For` est ignoré. C'est le seul défaut sûr,
+    puisque cet en-tête est posé par le client tant qu'aucun proxy ne le réécrit."""
+    brut = os.environ.get(NOM_ENV_PROXYS, "").strip()
+    if not brut:
+        return 0
+    try:
+        nombre = int(brut)
+    except ValueError:
+        logger.error(
+            "%s=%r n'est pas un entier — X-Forwarded-For sera ignoré.", NOM_ENV_PROXYS, brut
+        )
+        return 0
+    if nombre < 0:
+        logger.error("%s=%d doit être positif — X-Forwarded-For sera ignoré.", NOM_ENV_PROXYS, nombre)
+        return 0
+    return nombre
+
+
 def _identifiant_client(request: Request) -> str:
     """Identifie l'appelant pour le plafond de `/login`.
 
-    `request.client.host` seul donnait le pair TCP. Derrière le proxy edge de
-    Vercel, c'est l'adresse du proxy et non celle du visiteur : tous les
-    visiteurs auraient partagé un unique compteur (cf. audit phase 7, finding
-    N1). On lit donc d'abord les en-têtes de transfert.
+    `X-Forwarded-For` n'est PAS digne de confiance par défaut : c'est le client
+    qui l'écrit tant qu'aucun proxy ne le réécrit. La version précédente lisait
+    son premier maillon sans condition, ce qui rendait le plafond entièrement
+    contournable — mesuré : 50 tentatives avec un en-tête tournant, zéro refus
+    (cf. audit phase 8). Un contrôle présent à l'écran et absent dans les faits
+    est pire qu'un contrôle manquant.
 
-    Ces en-têtes sont falsifiables. Ce n'est pas un problème ici parce qu'une
-    authentification RÉUSSIE n'est jamais bloquée (cf. `connexion`) : usurper
-    l'identifiant d'un tiers ne permet que de remplir le compteur de ses
-    *échecs*, ce qui ne prive personne d'accès."""
-    transfere = request.headers.get("x-forwarded-for")
-    if transfere:
-        # Premier maillon = client d'origine, tel que le pose Vercel.
-        premier = transfere.split(",")[0].strip()
-        if premier:
-            return premier
-    reel = request.headers.get("x-real-ip")
-    if reel and reel.strip():
-        return reel.strip()
+    L'en-tête n'est donc lu que si l'opérateur a DÉCLARÉ combien de proxys de
+    confiance se trouvent devant l'application, via FAKENEWS_PROXYS_DE_CONFIANCE.
+    Chaque proxy ajoute en queue l'adresse dont il a reçu la requête : avec N
+    proxys de confiance, l'adresse du visiteur est le N-ième maillon en partant
+    de la fin. Tout ce qui précède a été écrit par le client et ne vaut rien.
+
+    Sans déclaration, on retombe sur le pair TCP. Derrière un proxy, cela signifie
+    un compteur partagé par tous les visiteurs — ce qui reste sans danger pour la
+    disponibilité, puisqu'une authentification RÉUSSIE n'est jamais plafonnée
+    (cf. `connexion`) : le partage ne prive personne d'accès, il rend seulement le
+    plafond global au lieu d'être par client."""
+    proxys = _proxys_de_confiance()
+    if proxys > 0:
+        transfere = request.headers.get("x-forwarded-for")
+        if transfere:
+            maillons = [m.strip() for m in transfere.split(",") if m.strip()]
+            # Le maillon posé par le proxy de confiance le plus externe. S'il en
+            # manque (en-tête tronqué ou forgé trop court), on ne devine pas : on
+            # retombe sur le pair TCP.
+            if len(maillons) >= proxys:
+                return maillons[-proxys]
     return request.client.host if request.client else "inconnu"
 
 
