@@ -133,10 +133,29 @@ def evaluer_articles_non_scores(
     return len(articles)
 
 
+def _plafond_depuis_env(nom: str, defaut: int) -> int:
+    """Un plafond mal saisi doit échouer, mais avec un diagnostic. `int()` nu levait
+    une ValueError qui ne nommait ni la variable ni la valeur attendue
+    (cf. audit phase 7, finding N10)."""
+    brut = os.environ.get(nom)
+    if brut is None or brut.strip() == "":
+        return defaut
+    try:
+        valeur = int(brut)
+    except ValueError:
+        raise SystemExit(
+            f"{nom}={brut!r} n'est pas un entier. Corriger la variable "
+            f"d'environnement, ou la retirer pour reprendre le défaut ({defaut})."
+        )
+    if valeur < 0:
+        raise SystemExit(f"{nom}={valeur} doit être positif ou nul.")
+    return valeur
+
+
 def main():
-    plafond = int(os.environ.get("LLM_PLAFOND_EVALUATEUR", PLAFOND_APPELS_LLM_PAR_DEFAUT))
-    plafond_articles = int(
-        os.environ.get("EVALUATEUR_PLAFOND_ARTICLES", PLAFOND_ARTICLES_PAR_DEFAUT)
+    plafond = _plafond_depuis_env("LLM_PLAFOND_EVALUATEUR", PLAFOND_APPELS_LLM_PAR_DEFAUT)
+    plafond_articles = _plafond_depuis_env(
+        "EVALUATEUR_PLAFOND_ARTICLES", PLAFOND_ARTICLES_PAR_DEFAUT
     )
     with SessionLocal() as session:
         evaluer_articles_non_scores(

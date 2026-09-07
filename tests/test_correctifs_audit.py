@@ -8,7 +8,6 @@ import time
 
 import httpx
 import pytest
-from conftest import _mode_heberge
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select, text
 
@@ -106,26 +105,26 @@ def test_mode_local_ne_prime_pas_sur_une_valeur_inattendue(db_session, monkeypat
 # --------------------------------------------------------------------------
 
 
-def test_cookie_expire_est_refuse(db_session, monkeypatch):
-    _mode_heberge(monkeypatch, "secret")
+def test_cookie_expire_est_refuse(db_session, monkeypatch, mode_heberge):
+    mode_heberge("secret")
     perime = _valeur_cookie("alice", "secret", None, expiration=int(time.time()) - 1)
     with pytest.raises(AccesRefuse):
         compte_courant(_requete(perime), db_session)
 
 
-def test_expiration_repoussee_sans_resigner_est_refusee(db_session, monkeypatch):
+def test_expiration_repoussee_sans_resigner_est_refusee(db_session, monkeypatch, mode_heberge):
     """L'expiration fait partie de la charge signée : la rallonger invalide la
     signature. Sans cela, `max_age` n'était qu'une suggestion au navigateur et un
     cookie capté restait valide indéfiniment."""
-    _mode_heberge(monkeypatch, "secret")
+    mode_heberge("secret")
     pseudo, expiration, signature = _valeur_cookie("alice", "secret").split(":")
     trafique = f"{pseudo}:{int(expiration) + 86400 * 365}:{signature}"
     with pytest.raises(AccesRefuse):
         compte_courant(_requete(trafique), db_session)
 
 
-def test_cookie_valide_non_expire_est_accepte(db_session, monkeypatch):
-    _mode_heberge(monkeypatch, "secret")
+def test_cookie_valide_non_expire_est_accepte(db_session, monkeypatch, mode_heberge):
+    mode_heberge("secret")
     assert compte_courant(_requete(_valeur_cookie("alice", "secret")), db_session).pseudo == "alice"
 
 
@@ -134,20 +133,74 @@ def test_cookie_valide_non_expire_est_accepte(db_session, monkeypatch):
 # --------------------------------------------------------------------------
 
 
-def test_login_bloque_apres_trop_de_tentatives(client, monkeypatch):
-    _mode_heberge(monkeypatch, "secret")
+def test_login_bloque_apres_trop_de_tentatives(client, monkeypatch, mode_heberge):
+    mode_heberge("secret")
     for _ in range(LOGIN_TENTATIVES_MAX):
         assert client.post("/login", data={"pseudo": "alice", "mot_de_passe": "faux"}).status_code == 401
 
     refuse = client.post("/login", data={"pseudo": "alice", "mot_de_passe": "faux"})
     assert refuse.status_code == 429
-    # Le bon mot de passe ne passe pas non plus tant que la fenêtre court : sinon
-    # il suffirait d'alterner pour contourner le plafond.
-    assert client.post("/login", data={"pseudo": "alice", "mot_de_passe": "secret"}).status_code == 429
 
 
-def test_une_connexion_reussie_remet_le_compteur_a_zero(client, monkeypatch):
-    _mode_heberge(monkeypatch, "secret")
+def test_le_plafond_ne_ferme_jamais_la_porte_a_qui_a_le_bon_mot_de_passe(client, monkeypatch, mode_heberge):
+    """Le plafond ne s'applique QU'AUX ÉCHECS.
+
+    La version précédente refusait aussi le bon mot de passe pendant la fenêtre.
+    Combinée à un identifiant client qui, derrière le proxy Vercel, est le même
+    pour tout le monde, elle transformait le durcissement en déni de service :
+    dix mauvais mots de passe fermaient le site à tous ceux qui connaissent le bon
+    (cf. audit phase 7, finding N1)."""
+    mode_heberge("secret")
+    for _ in range(LOGIN_TENTATIVES_MAX + 3):
+        client.post("/login", data={"pseudo": "attaquant", "mot_de_passe": "faux"})
+    assert client.post("/login", data={"pseudo": "attaquant", "mot_de_passe": "faux"}).status_code == 429
+
+    legitime = client.post(
+        "/login", data={"pseudo": "alice", "mot_de_passe": "secret"}, follow_redirects=False
+    )
+    assert legitime.status_code == 303, "un mot de passe correct ne doit jamais être plafonné"
+    assert client.get("/").status_code == 200
+
+
+def test_l_identifiant_client_suit_l_en_tete_de_transfert(client, monkeypatch, mode_heberge):
+    """Derrière un proxy, `request.client.host` est l'adresse du proxy : sans lire
+    `X-Forwarded-For`, tous les visiteurs partageaient un unique compteur."""
+    mode_heberge("secret")
+    for _ in range(LOGIN_TENTATIVES_MAX + 1):
+        client.post(
+            "/login",
+            data={"pseudo": "alice", "mot_de_passe": "faux"},
+            headers={"X-Forwarded-For": "198.51.100.9"},
+        )
+    bloque = client.post(
+        "/login",
+        data={"pseudo": "alice", "mot_de_passe": "faux"},
+        headers={"X-Forwarded-For": "198.51.100.9"},
+    )
+    assert bloque.status_code == 429
+
+    # Un autre visiteur, derrière le même proxy, garde son propre compteur.
+    autre = client.post(
+        "/login",
+        data={"pseudo": "alice", "mot_de_passe": "faux"},
+        headers={"X-Forwarded-For": "203.0.113.4"},
+    )
+    assert autre.status_code == 401
+
+
+def test_la_table_des_tentatives_reste_bornee():
+    """Prouvé pendant l'audit : 50 000 clients échouant une fois chacun laissaient
+    50 000 entrées permanentes (~43 Mo), aucune purge globale n'existant
+    (cf. audit phase 7, finding N5)."""
+    from fakenews.frontend.app import LOGIN_CLIENTS_MAX, _enregistrer_tentative_ratee
+
+    for i in range(LOGIN_CLIENTS_MAX + 500):
+        _enregistrer_tentative_ratee(f"198.51.100.{i}")
+    assert len(_tentatives_login) <= LOGIN_CLIENTS_MAX
+
+
+def test_une_connexion_reussie_remet_le_compteur_a_zero(client, monkeypatch, mode_heberge):
+    mode_heberge("secret")
     for _ in range(LOGIN_TENTATIVES_MAX - 1):
         client.post("/login", data={"pseudo": "alice", "mot_de_passe": "faux"})
 
@@ -179,10 +232,10 @@ def test_le_superadmin_seme_par_la_migration_a_bien_un_code(db_session):
     assert a_un_code is True, "migration 0002 non appliquée, ou superadmin sans code personnel"
 
 
-def test_le_mot_de_passe_partage_ne_donne_pas_acces_au_superadmin_par_defaut(client, db_session, monkeypatch):
+def test_le_mot_de_passe_partage_ne_donne_pas_acces_au_superadmin_par_defaut(client, db_session, monkeypatch, mode_heberge):
     """Le scénario exact du finding H3, joué de bout en bout SANS poser de code
     personnel au préalable : c'est l'état livré par la migration qui est testé."""
-    _mode_heberge(monkeypatch, "partage")
+    mode_heberge("partage")
     assert client.post("/login", data={"pseudo": "samirkema", "mot_de_passe": "partage"}).status_code == 401
 
 
@@ -224,19 +277,61 @@ def test_le_contenu_hostile_arrive_encadre_dans_le_prompt():
 # --------------------------------------------------------------------------
 
 
-def test_un_article_sans_titre_ni_contenu_est_non_evaluable():
-    """`style` renvoyait toujours une valeur, donc somme_poids ne pouvait jamais
-    être nulle : la contrainte SQL, le filtre du frontend et la garde du
-    contextualiseur défendaient un état inatteignable."""
-    sous_scores = {
-        "reputation": {"valeur": None, "raison": "", "preuve_id": "reputation"},
-        "style": evaluer_style("", "", auteur=None),
-        "fact_checking": {"valeur": None, "raison": "", "preuve_id": "fact_checking"},
-    }
-    resultat = calculer_score_composite(sous_scores, POIDS_PAR_DEFAUT)
+def test_non_evaluable_est_atteignable_depuis_le_pipeline(db_session):
+    """Le test précédent appelait `evaluer_style("", "")` en isolation : il validait
+    une entrée que le pipeline ne produit JAMAIS, puisque `scraper/rss.py:120`
+    rejette les entrées sans titre et que Reddit en impose un. Il donnait donc une
+    fausse confiance, et laissait survivre la mutation « retirer la branche
+    d'exclusion de style » (cf. audit phase 7, findings N2 et N3).
 
-    assert resultat["non_evaluable"] is True
-    assert resultat["score_final"] is None
+    Celui-ci part d'un article tel que le scraper en persiste — un post Reddit
+    réduit à un ticker, sans corps, avec un auteur, sur un domaine hors des deux
+    listes de réputation — et vérifie l'état réellement écrit en base."""
+    from datetime import datetime, timezone
+
+    from fakenews.evaluateur.run_evaluateur import evaluer_articles_non_scores
+    from fakenews.models import Article, Score
+
+    db_session.add(
+        Article(
+            titre="GME",  # post reduit a un ticker, sans corps
+            contenu="",
+            auteur="un_redditeur",
+            domaine_source="reddit.com/r/stocks",  # ni fiable ni douteux
+            date_publication=datetime.now(timezone.utc),
+            url="https://www.reddit.com/r/stocks/comments/abc123/gme/",
+            url_canonique="https://www.reddit.com/r/stocks/comments/abc123/gme/",
+            hash_contenu="hash-non-evaluable",
+            plateforme="reddit",
+            metadonnees={},
+        )
+    )
+    db_session.flush()
+
+    evaluer_articles_non_scores(db_session, plafond_llm=0)
+
+    score = db_session.execute(select(Score)).scalars().one()
+    assert score.non_evaluable is True, (
+        "aucun signal n'est applicable sur cet article : non_evaluable doit être "
+        "atteignable, sinon la contrainte SQL, le filtre du frontend et la garde du "
+        "contextualiseur défendent un état impossible"
+    )
+    assert score.score_final is None
+    assert all(s["valeur"] is None for s in score.sous_scores.values())
+
+
+def test_l_exclusion_de_style_reste_etroite():
+    """Contrepartie indispensable : l'exclusion ne doit pas avaler le corpus. Un
+    post Reddit de type lien — titre réel, corps vide, auteur présent — reste
+    évalué, sinon la majeure partie de Reddit disparaîtrait du frontend."""
+    lien_reddit = evaluer_style("Apple annonce sa nouvelle gamme aujourd'hui", "", auteur="un_redditeur")
+    assert lien_reddit["valeur"] == 10.0
+
+    sans_auteur = evaluer_style("GME", "", auteur=None)
+    assert sans_auteur["valeur"] == 20.0, "« aucun auteur » reste un signal, pas une exclusion"
+
+    ticker_seul = evaluer_style("GME", "", auteur="un_redditeur")
+    assert ticker_seul["valeur"] is None
 
 
 # --------------------------------------------------------------------------
@@ -280,8 +375,8 @@ def test_le_detail_du_calcul_est_persiste(db_session):
 # --------------------------------------------------------------------------
 
 
-def test_logout_supprime_le_cookie_avec_les_memes_attributs(client, monkeypatch):
-    _mode_heberge(monkeypatch, "secret")
+def test_logout_supprime_le_cookie_avec_les_memes_attributs(client, monkeypatch, mode_heberge):
+    mode_heberge("secret")
     client.post("/login", data={"pseudo": "alice", "mot_de_passe": "secret"})
 
     entete = client.post("/logout", follow_redirects=False).headers["set-cookie"].lower()

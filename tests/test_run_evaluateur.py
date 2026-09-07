@@ -24,11 +24,13 @@ def _inserer_article(session, domaine_source, suffixe, auteur="Auteur Test", con
     return article
 
 
-# NB : la base de test locale contient aussi de vraies données collectées par le
-# scraper (278+ articles non scorés) — evaluer_articles_non_scores() les traite tous,
-# par conception (même logique que collecter_rss/collecter_reddit). Les assertions
-# ci-dessous vérifient donc le score de l'article de CE test spécifiquement, jamais
-# un compte total qui inclurait les vraies données.
+# NB : la base de test locale peut contenir de vraies données collectées par le
+# scraper. evaluer_articles_non_scores() en traite au plus PLAFOND_ARTICLES_PAR_DEFAUT
+# (300) par appel, les plus RÉCENTS d'abord — l'article inséré par chaque test est
+# daté de maintenant, il est donc toujours dans la fenêtre. Les assertions ci-dessous
+# vérifient le score de l'article de CE test spécifiquement, jamais un compte total.
+# (Ce commentaire affirmait « les traite tous, par conception », ce qui n'est plus
+# vrai depuis l'ajout du plafond — cf. audit phase 7, finding N8.)
 #
 # Aucune ANTHROPIC_API_KEY / GOOGLE_FACT_CHECK_API_KEY n'est configurée dans cet
 # environnement de test : US-07 (llm_bootstrap) est absent de sous_scores (client LLM

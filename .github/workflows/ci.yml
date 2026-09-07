@@ -60,6 +60,18 @@ jobs:
             psql "$PSQL_URL" -v ON_ERROR_STOP=1 -f "$migration"
           done
 
+      # N7 (audit phase 7) : faute de lockfile, deux exécutions du même commit
+      # peuvent résoudre des versions différentes. On ne peut pas le prévenir ici,
+      # mais on le rend OBSERVABLE : le jeu réellement installé est archivé, donc
+      # une régression « ça marchait hier » se diagnostique en comparant deux runs.
+      - name: Archiver les versions réellement résolues
+        run: pip freeze > versions-resolues.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: versions-resolues
+          path: versions-resolues.txt
+
       - name: Tests
         run: pytest -q --junit-xml=rapport.xml
 
@@ -67,9 +79,20 @@ jobs:
         if: always()
         run: |
           python - <<'PY'
-          import os, sys, xml.etree.ElementTree as ET
+          import os, pathlib, sys, xml.etree.ElementTree as ET
 
-          suite = ET.parse("rapport.xml").getroot().find("testsuite")
+          rapport = pathlib.Path("rapport.xml")
+          if not rapport.exists():
+              # `if: always()` fait tourner ce step même quand pytest a échoué avant
+              # d'écrire son rapport (erreur de collecte, par exemple). Sans cette
+              # garde, on remontait une FileNotFoundError nue à la place du vrai
+              # problème (cf. audit phase 7, finding N12).
+              sys.exit(
+                  "Aucun rapport.xml : pytest n'est pas allé jusqu'à l'exécution des "
+                  "tests. Voir le step « Tests » ci-dessus pour la cause réelle."
+              )
+
+          suite = ET.parse(rapport).getroot().find("testsuite")
           skips, total = int(suite.get("skipped")), int(suite.get("tests"))
           budget = int(os.environ["SKIPS_MAX"])
           print(f"{skips} skip(s) sur {total} test(s) — budget : {budget}")

@@ -13,7 +13,6 @@ SEC EDGAR lui-même (cf. userstories_évaluateur.md, US-04, dernier critère).""
 import logging
 import os
 import re
-import threading
 import time
 from datetime import date, datetime, timedelta
 
@@ -32,17 +31,21 @@ VALEUR_NON_CONFIRME = 85.0
 # throttlait les appels jusqu'ici (cf. audit, finding M9) : un run sur plusieurs
 # centaines d'articles pouvait déclencher un blocage d'IP.
 INTERVALLE_MIN_SEC = 0.15
-_verrou_debit = threading.Lock()
 _dernier_appel = 0.0
 
 
 def _respecter_le_debit_sec() -> None:
+    """Le pipeline est strictement séquentiel : pas de verrou. Il y en avait un,
+    qui protégeait un compteur qu'aucune concurrence n'atteint et faisait le
+    `sleep` à l'intérieur (cf. audit phase 7, finding N11). Si un jour l'évaluateur
+    parallélise ses appels, c'est le débit lui-même qu'il faudra repenser, pas ce
+    verrou qu'il aurait fallu ajouter."""
     global _dernier_appel
-    with _verrou_debit:
-        attente = INTERVALLE_MIN_SEC - (time.monotonic() - _dernier_appel)
-        if attente > 0:
-            time.sleep(attente)
-        _dernier_appel = time.monotonic()
+    attente = INTERVALLE_MIN_SEC - (time.monotonic() - _dernier_appel)
+    if attente > 0:
+        time.sleep(attente)
+    _dernier_appel = time.monotonic()
+
 
 ENTREPRISES_CONNUES = {
     "apple": "AAPL",
@@ -179,14 +182,32 @@ TERMES_RECHERCHE_MIN = 1
 
 # Marqueurs d'une claim « précise et vérifiable (annonce, chiffre, décision) », au
 # sens exact du 3e critère d'acceptation d'US-04.
-_MARQUEURS_CLAIM = re.compile(
-    r"\d|%|\$|€|\b(announce|announces|announced|announcement|report|reports|reported|"
+#
+# L'alternative `\d` seule, présente ici auparavant, rendait la porte quasi
+# toujours passante : un horodatage Reddit, un compteur de commentaires, un
+# millésime ou un numéro de fil suffisaient à qualifier « fait précis et
+# vérifiable » (cf. audit phase 7, finding N4). Un chiffre ne compte désormais que
+# s'il est QUANTIFIÉ — devise, pourcentage, ordre de grandeur, ou nombre assez
+# grand pour ne pas être une date ni un compteur d'interface.
+_MOTIF_VERBE_ANNONCE = (
+    r"announce|announces|announced|announcement|report|reports|reported|"
     r"file|files|filed|filing|acquire|acquires|acquired|acquisition|merger|merge|"
     r"recall|recalls|lawsuit|dividend|earnings|guidance|buyback|layoff|layoffs|"
     r"bankruptcy|resign|resigns|resigned|appoint|appoints|approves|approved|"
     r"annonce|annonces|annoncé|annoncée|rachat|fusion|rappel|résultats|resultats|"
     r"bénéfice|benefice|dividende|licenciement|licenciements|démission|demission|"
-    r"acquisition|faillite|nomination|autorise|autorisé)\b",
+    r"faillite|nomination|autorise|autorisé"
+)
+_MARQUEURS_CLAIM = re.compile(
+    # une somme ou un pourcentage : « 0,25 $ », « 12 % », « $4.5bn »
+    r"[$€£]\s?\d|\d\s?[$€£%]|\d\s?(?:pour cent|percent)\b"
+    # un ordre de grandeur explicite : « 900 billion », « 3 milliards »
+    r"|\d[\d.,\s]*\s?(?:million|millions|billion|billions|milliard|milliards|bn|md)\b"
+    # un nombre à 5 chiffres ou plus : trop grand pour un millésime (2026) ou un
+    # compteur d'interface (42 commentaires), donc porteur d'information
+    r"|\b\d{5,}\b"
+    # une annonce, une décision, une démission…
+    rf"|\b(?:{_MOTIF_VERBE_ANNONCE})\b",
     re.IGNORECASE,
 )
 

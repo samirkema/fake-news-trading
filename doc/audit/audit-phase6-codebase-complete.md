@@ -36,6 +36,10 @@ confirmation » et facturée `VALEUR_NON_CONFIRME = 85.0` au poids le plus lourd
 fait précis et vérifiable (annonce, chiffre, décision) » — condition non
 implémentée : un commentaire d'humeur citant Apple récoltait 85/100.
 
+> **Rectificatif (audit phase 7, finding N4)** : le garde-fou ajouté ici laissait
+> encore passer tout texte contenant un chiffre quelconque — horodatage, compteur
+> de commentaires, millésime. Il n'a été réellement resserré qu'en phase 7.
+
 Le signal a été restructuré autour d'une **requête de contrôle**, parce que le
 seul choix de meilleurs mots-clés ne suffisait pas — mesuré : même avec 4 termes
 issus du titre, 0 hit sur un dépôt qui existe.
@@ -110,7 +114,7 @@ positifs sont verrouillés par un test paramétré.
 | --- | --- | --- |
 | M1 | Pagination non déterministe : `ORDER BY score_final DESC` sans départage, sur des `numeric(5,2)` où les ex æquo sont la règle | `order_by(..., Article.id)`. Test qui vérifie que l'union des pages = 55 articles distincts (l'ancien se contentait de compter 50 puis 5, et survivait à la mutation) |
 | M2 | `date_max` comparé à un `timestamptz` : la journée indiquée était perdue | Bornes converties en minuit UTC explicite, borne haute `< jour+1`. Deux tests de bornes avec données |
-| M3 | `non_evaluable` mathématiquement inatteignable (`style` renvoyait toujours une valeur) : contrainte SQL, filtre frontend et garde du contextualiseur étaient du code mort | `style` s'exclut quand il n'y a rien à analyser, et ne reproche plus l'absence de citation à un corps de moins de 200 caractères (un post Reddit de type lien) |
+| M3 | `non_evaluable` mathématiquement inatteignable (`style` renvoyait toujours une valeur) : contrainte SQL, filtre frontend et garde du contextualiseur étaient du code mort | **Correctif inopérant, repris en phase 7 (finding N2).** La condition posée ici — titre ET contenu vides — n'est jamais remplie : `rss.py:120` rejette les entrées sans titre et Reddit en impose un. `style` ne reproche plus l'absence de citation à un corps court, ce qui reste acquis. |
 | M4 | `detail` du calcul produit puis jeté, alors qu'US-08 l'exige | Colonne `scores.detail_calcul` (migration 0003), persistée par l'évaluateur et les deux backfills |
 | M5 | Cookie = HMAC déterministe du seul pseudo : valide indéfiniment une fois capté, révocable seulement en déconnectant tout le monde | Expiration **dans la charge signée** (`pseudo:expiration:signature`), 30 jours. Tests : cookie expiré refusé, expiration rallongée refusée |
 | M6 | Aucune friction sur `POST /login` avec un secret unique partagé | Fenêtre glissante, 10 tentatives / 5 min / client, 429. Limite documentée : compteur par instance sur Vercel |

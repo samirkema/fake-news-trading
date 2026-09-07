@@ -47,24 +47,35 @@ def _detecter_langue(texte: str) -> str:
 # bruit (cf. audit, finding M3).
 LONGUEUR_MIN_POUR_CITATION = 200
 
+# En deçà, un titre sans corps ne porte aucune matière stylistique : un post
+# réduit à « GME » n'a ni ponctuation à juger, ni vocabulaire à peser, ni longueur
+# permettant de conclure quoi que ce soit. C'est le seul cas où le signal
+# s'exclut.
+LONGUEUR_MIN_TITRE_JUGEABLE = 20
+
 
 def evaluer_style(titre: str, contenu: str, auteur: str | None) -> dict:
     """Retourne {"valeur": float | None, "raison": str, "preuve_id": "style"}. Chaque
     signal détecté contribue individuellement à la justification tracée (cf. US-05
     évaluateur, critère d'acceptation "chaque signal détecté... de façon traçable").
 
-    `valeur` est None (signal exclu, cf. US-08) quand il n'y a littéralement rien à
-    analyser. Auparavant ce signal renvoyait toujours une valeur, ce qui rendait
-    `non_evaluable` mathématiquement inatteignable et transformait en code mort la
-    contrainte SQL, le filtre du frontend et la garde du contextualiseur qui le
-    défendent (cf. audit, finding M3)."""
-    if not titre.strip() and not contenu.strip():
-        return {
-            "valeur": None,
-            "raison": "non applicable — ni titre ni contenu exploitable",
-            "preuve_id": "style",
-        }
+    `valeur` est None (signal exclu, cf. US-08) quand l'article n'offre aucune
+    matière stylistique : pas de corps, un titre trop court pour être jugé, et
+    aucun signal détecté par ailleurs. Affirmer alors une suspicion basse (le
+    plancher à 10.0) serait une conclusion tirée de rien.
 
+    Ce critère est volontairement ÉTROIT et ATTEIGNABLE, deux propriétés que les
+    versions précédentes n'ont pas eues ensemble :
+
+    - la première n'excluait que si titre ET contenu étaient vides — or
+      `scraper/rss.py` rejette toute entrée sans titre et Reddit en impose un :
+      condition jamais remplie, `non_evaluable` hors d'atteinte (audit phase 7, N2) ;
+    - la deuxième excluait dès que le corps était court, ce qui aurait avalé la
+      majeure partie des posts Reddit de type lien et fait disparaître leurs
+      articles du frontend.
+
+    Un post réduit à un ticker (« GME ») sans corps, lui, existe et ne se juge
+    pas."""
     signaux = []
     penalite = 0.0
 
@@ -72,7 +83,8 @@ def evaluer_style(titre: str, contenu: str, auteur: str | None) -> dict:
         signaux.append("aucun auteur identifiable")
         penalite += 20.0
 
-    if len(contenu.strip()) >= LONGUEUR_MIN_POUR_CITATION:
+    corps_jugeable = len(contenu.strip()) >= LONGUEUR_MIN_POUR_CITATION
+    if corps_jugeable:
         a_une_citation = bool(re.search(r'"[^"]{10,}"|«[^»]{10,}»', contenu))
         if not a_une_citation:
             signaux.append("aucune citation ou source nommée détectée")
@@ -90,6 +102,15 @@ def evaluer_style(titre: str, contenu: str, auteur: str | None) -> dict:
         penalite += min(30.0, 10.0 * len(mots_trouves))
 
     if not signaux:
+        if not contenu.strip() and len(titre.strip()) < LONGUEUR_MIN_TITRE_JUGEABLE:
+            return {
+                "valeur": None,
+                "raison": (
+                    "non applicable — aucun corps et titre trop court pour porter un "
+                    "signal stylistique"
+                ),
+                "preuve_id": "style",
+            }
         return {
             "valeur": 10.0,
             "raison": "aucun signal stylistique de sensationnalisme détecté",

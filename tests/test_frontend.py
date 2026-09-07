@@ -2,7 +2,6 @@ import re
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
-from conftest import _mode_heberge
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
@@ -14,7 +13,7 @@ from fakenews.models import Article, MiseEnContexte, Score
 def client(db_session, monkeypatch):
     # Mode local EXPLICITE par défaut : les tests de rendu (liste, détail, filtres,
     # pagination) n'ont pas à traverser l'authentification. Les tests d'auth
-    # appellent `_mode_heberge(...)` dans leur corps, ce qui s'exécute après cette
+    # appellent `mode_heberge(...)` dans leur corps, ce qui s'exécute après cette
     # fixture et bascule donc bien en mode hébergé.
     monkeypatch.setenv("FAKENEWS_MODE", "local")
     app.dependency_overrides[get_session] = lambda: db_session
@@ -136,23 +135,23 @@ def test_avertissement_visible_sur_la_liste_et_le_detail(client, db_session):
     assert extrait in client.get(f"/articles/{article.id}").text
 
 
-def test_sans_cookie_redirige_vers_login_si_mot_de_passe_configure(client, monkeypatch):
-    _mode_heberge(monkeypatch, "secret")
+def test_sans_cookie_redirige_vers_login_si_mot_de_passe_configure(client, monkeypatch, mode_heberge):
+    mode_heberge("secret")
     reponse = client.get("/", follow_redirects=False)
     assert reponse.status_code == 303
     assert reponse.headers["location"] == "/login"
 
 
-def test_page_login_a_un_champ_pseudo_et_mot_de_passe(client, monkeypatch):
-    _mode_heberge(monkeypatch, "secret")
+def test_page_login_a_un_champ_pseudo_et_mot_de_passe(client, monkeypatch, mode_heberge):
+    mode_heberge("secret")
     reponse = client.get("/login")
     assert reponse.status_code == 200
     assert 'name="pseudo"' in reponse.text
     assert 'type="password"' in reponse.text
 
 
-def test_login_avec_pseudo_et_bon_mot_de_passe_donne_acces(client, monkeypatch):
-    _mode_heberge(monkeypatch, "secret")
+def test_login_avec_pseudo_et_bon_mot_de_passe_donne_acces(client, monkeypatch, mode_heberge):
+    mode_heberge("secret")
 
     connexion = client.post(
         "/login", data={"pseudo": "alice", "mot_de_passe": "secret"}, follow_redirects=False
@@ -165,29 +164,29 @@ def test_login_avec_pseudo_et_bon_mot_de_passe_donne_acces(client, monkeypatch):
     assert reponse.status_code == 200
 
 
-def test_login_sans_pseudo_rejete(client, monkeypatch):
-    _mode_heberge(monkeypatch, "secret")
+def test_login_sans_pseudo_rejete(client, monkeypatch, mode_heberge):
+    mode_heberge("secret")
     reponse = client.post("/login", data={"mot_de_passe": "secret"})
     assert reponse.status_code == 422  # champ de formulaire requis (FastAPI)
 
 
-def test_login_pseudo_invalide_rejete(client, monkeypatch):
-    _mode_heberge(monkeypatch, "secret")
+def test_login_pseudo_invalide_rejete(client, monkeypatch, mode_heberge):
+    mode_heberge("secret")
     reponse = client.post("/login", data={"pseudo": "a b/c", "mot_de_passe": "secret"})
     assert reponse.status_code == 401
     assert "pseudo invalide" in reponse.text.lower()
 
 
-def test_login_avec_mauvais_mot_de_passe_refuse(client, monkeypatch):
-    _mode_heberge(monkeypatch, "secret")
+def test_login_avec_mauvais_mot_de_passe_refuse(client, monkeypatch, mode_heberge):
+    mode_heberge("secret")
 
     reponse = client.post("/login", data={"pseudo": "alice", "mot_de_passe": "faux"})
     assert reponse.status_code == 401
     assert "incorrect" in reponse.text.lower()
 
 
-def test_cookie_falsifie_redirige_vers_login(client, monkeypatch):
-    _mode_heberge(monkeypatch, "secret")
+def test_cookie_falsifie_redirige_vers_login(client, monkeypatch, mode_heberge):
+    mode_heberge("secret")
     # Cookie forgé : on garde une signature valide pour « alice » mais on prétend
     # être « samirkema » -> la signature ne correspond pas, accès refusé.
     from fakenews.frontend.app import _valeur_cookie
@@ -200,8 +199,8 @@ def test_cookie_falsifie_redirige_vers_login(client, monkeypatch):
     assert reponse.headers["location"] == "/login"
 
 
-def test_logout_supprime_l_acces(client, monkeypatch):
-    _mode_heberge(monkeypatch, "secret")
+def test_logout_supprime_l_acces(client, monkeypatch, mode_heberge):
+    mode_heberge("secret")
     client.post("/login", data={"pseudo": "alice", "mot_de_passe": "secret"})
     assert client.get("/").status_code == 200
 
@@ -217,10 +216,10 @@ def test_pas_d_authentification_en_mode_local(client, monkeypatch):
     assert reponse.status_code == 200
 
 
-def test_superadmin_a_un_code_distinct_du_mot_de_passe_partage(client, db_session, monkeypatch):
+def test_superadmin_a_un_code_distinct_du_mot_de_passe_partage(client, db_session, monkeypatch, mode_heberge):
     from sqlalchemy import text
 
-    _mode_heberge(monkeypatch, "partage")
+    mode_heberge("partage")
     db_session.execute(
         text(
             "update comptes set secret_hash = crypt('code-samir', gen_salt('bf')) "
@@ -243,10 +242,10 @@ def test_superadmin_a_un_code_distinct_du_mot_de_passe_partage(client, db_sessio
     assert client.get("/").status_code == 200
 
 
-def test_mot_de_passe_partage_reste_valable_pour_les_autres_pseudos(client, db_session, monkeypatch):
+def test_mot_de_passe_partage_reste_valable_pour_les_autres_pseudos(client, db_session, monkeypatch, mode_heberge):
     from sqlalchemy import text
 
-    _mode_heberge(monkeypatch, "partage")
+    mode_heberge("partage")
     db_session.execute(
         text(
             "update comptes set secret_hash = crypt('code-samir', gen_salt('bf')) "
@@ -262,12 +261,12 @@ def test_mot_de_passe_partage_reste_valable_pour_les_autres_pseudos(client, db_s
     assert client.get("/").status_code == 200
 
 
-def test_le_role_n_est_jamais_affiche(client, db_session, monkeypatch):
+def test_le_role_n_est_jamais_affiche(client, db_session, monkeypatch, mode_heberge):
     # L'utilisateur ne doit pas pouvoir voir son statut : ni le pseudo, ni le rôle
     # ne remontent dans les pages, quel que soit le rôle résolu.
     from fakenews.models import Compte
 
-    _mode_heberge(monkeypatch, "secret")
+    mode_heberge("secret")
     # Un superadmin DOIT avoir un code personnel : la contrainte
     # ck_comptes_superadmin_a_un_code (migration 0002, correctif du finding H3)
     # rejette désormais l'état qui rendait le mot de passe partagé suffisant.

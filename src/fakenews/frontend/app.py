@@ -47,13 +47,23 @@ DUREE_SESSION = timedelta(days=30)
 # FAKENEWS_MODE=local pour désactiver l'auth (cf. audit, finding H4).
 MODE_LOCAL = "local"
 
-# Anti-bruteforce sur /login (cf. audit, finding M6) : le mot de passe partagé est
-# un secret unique, l'endpoint n'avait aucune friction. Fenêtre glissante en
-# mémoire du process. Limite connue et assumée : sur Vercel chaque instance a sa
-# propre mémoire, donc le plafond réel est multiplié par le nombre d'instances
-# tièdes — c'est un ralentisseur, pas une barrière cryptographique.
+# Anti-bruteforce sur /login (cf. audit phase 6, finding M6) : le mot de passe
+# partagé est un secret unique, l'endpoint n'avait aucune friction. Fenêtre
+# glissante en mémoire du process.
+#
+# Deux limites connues et assumées : sur Vercel chaque instance a sa propre
+# mémoire, donc le plafond réel est multiplié par le nombre d'instances tièdes ;
+# et c'est un ralentisseur, pas une barrière cryptographique.
+#
+# Le plafond ne s'applique QU'AUX ÉCHECS : une authentification réussie passe
+# toujours, même compteur plein (cf. `connexion`). C'est ce qui empêche le
+# plafond de se transformer en déni de service — dix mauvais mots de passe ne
+# doivent pas fermer le site aux gens qui connaissent le bon (audit phase 7, N1).
 LOGIN_TENTATIVES_MAX = 10
 LOGIN_FENETRE_SECONDES = 300
+# Borne dure sur le nombre de clients suivis, pour que la table ne puisse pas
+# grossir indéfiniment (audit phase 7, N5).
+LOGIN_CLIENTS_MAX = 10_000
 _tentatives_login: dict[str, deque] = {}
 
 # Pseudo : normalisé en minuscules. Jeu de caractères restreint car il est aussi
@@ -140,22 +150,69 @@ def _signature_valide(
     )
 
 
+def _purger_tentatives(maintenant: float) -> None:
+    """Purge globale des clients dont toutes les tentatives sont sorties de la
+    fenêtre. Sans elle, `_trop_de_tentatives` ne nettoyait que la clé qu'on lui
+    présentait : 50 000 clients échouant une fois chacun laissaient 50 000 entrées
+    permanentes (~43 Mo), mesuré (cf. audit phase 7, finding N5)."""
+    for identifiant in [
+        cle
+        for cle, tentatives in _tentatives_login.items()
+        if not tentatives or maintenant - tentatives[-1] > LOGIN_FENETRE_SECONDES
+    ]:
+        _tentatives_login.pop(identifiant, None)
+
+
 def _trop_de_tentatives(identifiant_client: str) -> bool:
     """Fenêtre glissante : purge les tentatives sorties de la fenêtre, puis décide."""
     maintenant = time.monotonic()
-    tentatives = _tentatives_login.setdefault(identifiant_client, deque())
+    tentatives = _tentatives_login.get(identifiant_client)
+    if tentatives is None:
+        return False
     while tentatives and maintenant - tentatives[0] > LOGIN_FENETRE_SECONDES:
         tentatives.popleft()
     if not tentatives:
         _tentatives_login.pop(identifiant_client, None)
+        return False
     return len(tentatives) >= LOGIN_TENTATIVES_MAX
 
 
 def _enregistrer_tentative_ratee(identifiant_client: str) -> None:
-    _tentatives_login.setdefault(identifiant_client, deque()).append(time.monotonic())
+    maintenant = time.monotonic()
+    if len(_tentatives_login) >= LOGIN_CLIENTS_MAX:
+        _purger_tentatives(maintenant)
+        if len(_tentatives_login) >= LOGIN_CLIENTS_MAX:
+            # Toujours saturé après purge : on sacrifie le suivi le plus ancien
+            # plutôt que de laisser la table grossir indéfiniment.
+            _tentatives_login.pop(min(_tentatives_login, key=lambda c: _tentatives_login[c][-1]), None)
+    _tentatives_login.setdefault(identifiant_client, deque()).append(maintenant)
 
 
-def _client_de(request: Request) -> str:
+def _oublier_tentatives(identifiant_client: str) -> None:
+    _tentatives_login.pop(identifiant_client, None)
+
+
+def _identifiant_client(request: Request) -> str:
+    """Identifie l'appelant pour le plafond de `/login`.
+
+    `request.client.host` seul donnait le pair TCP. Derrière le proxy edge de
+    Vercel, c'est l'adresse du proxy et non celle du visiteur : tous les
+    visiteurs auraient partagé un unique compteur (cf. audit phase 7, finding
+    N1). On lit donc d'abord les en-têtes de transfert.
+
+    Ces en-têtes sont falsifiables. Ce n'est pas un problème ici parce qu'une
+    authentification RÉUSSIE n'est jamais bloquée (cf. `connexion`) : usurper
+    l'identifiant d'un tiers ne permet que de remplir le compteur de ses
+    *échecs*, ce qui ne prive personne d'accès."""
+    transfere = request.headers.get("x-forwarded-for")
+    if transfere:
+        # Premier maillon = client d'origine, tel que le pose Vercel.
+        premier = transfere.split(",")[0].strip()
+        if premier:
+            return premier
+    reel = request.headers.get("x-real-ip")
+    if reel and reel.strip():
+        return reel.strip()
     return request.client.host if request.client else "inconnu"
 
 
@@ -247,45 +304,53 @@ def connexion(
     pseudos utilisent le mot de passe partagé FRONTEND_PASSWORD.
 
     Les tentatives ratées sont comptées par client sur une fenêtre glissante
-    (cf. audit, finding M6)."""
+    (cf. audit phase 6, finding M6). Le plafond ne s'applique QU'AUX ÉCHECS : on
+    vérifie d'abord les identifiants, et un mot de passe correct ouvre la session
+    même compteur plein. Sans cette règle, dix mauvais mots de passe fermaient le
+    site à tous ceux qui connaissent le bon — un déni de service à dix requêtes
+    (cf. audit phase 7, finding N1)."""
     partage = os.environ.get("FRONTEND_PASSWORD")
     if not partage:
         logger.error("Tentative de connexion alors que FRONTEND_PASSWORD n'est pas définie.")
         return _erreur_login(request, "Authentification non configurée sur ce déploiement.")
 
-    client = _client_de(request)
-    if _trop_de_tentatives(client):
-        logger.warning("Trop de tentatives de connexion depuis %s — refus temporaire.", client)
-        return templates.TemplateResponse(
-            request,
-            "login.html",
-            {"erreur": "Trop de tentatives. Réessayer dans quelques minutes."},
-            status_code=429,
-        )
+    client = _identifiant_client(request)
+    plafond_atteint = _trop_de_tentatives(client)
 
     pseudo_normalise = _normaliser_pseudo(pseudo)
     if pseudo_normalise is None:
-        _enregistrer_tentative_ratee(client)
-        return _erreur_login(
-            request, "Pseudo invalide (lettres, chiffres, « . _ - », 64 caractères max)."
-        )
-    secret_hash = session.execute(
-        select(Compte.secret_hash).where(func.lower(Compte.pseudo) == pseudo_normalise)
-    ).scalar_one_or_none()
-    if secret_hash is not None:
-        # Vérification bcrypt déléguée à Postgres (pgcrypto) : crypt(code, hash) == hash.
-        mot_de_passe_ok = bool(
-            session.execute(
-                select(func.crypt(mot_de_passe, secret_hash) == secret_hash)
-            ).scalar_one()
-        )
+        mot_de_passe_ok = False
     else:
-        mot_de_passe_ok = hmac.compare_digest(mot_de_passe, partage)
+        secret_hash = session.execute(
+            select(Compte.secret_hash).where(func.lower(Compte.pseudo) == pseudo_normalise)
+        ).scalar_one_or_none()
+        if secret_hash is not None:
+            # Vérification bcrypt déléguée à Postgres (pgcrypto) : crypt(code, hash) == hash.
+            mot_de_passe_ok = bool(
+                session.execute(
+                    select(func.crypt(mot_de_passe, secret_hash) == secret_hash)
+                ).scalar_one()
+            )
+        else:
+            mot_de_passe_ok = hmac.compare_digest(mot_de_passe, partage)
+
     if not mot_de_passe_ok:
         _enregistrer_tentative_ratee(client)
+        if plafond_atteint:
+            logger.warning("Trop de tentatives ratées depuis %s — refus temporaire.", client)
+            return templates.TemplateResponse(
+                request,
+                "login.html",
+                {"erreur": "Trop de tentatives. Réessayer dans quelques minutes."},
+                status_code=429,
+            )
+        if pseudo_normalise is None:
+            return _erreur_login(
+                request, "Pseudo invalide (lettres, chiffres, « . _ - », 64 caractères max)."
+            )
         return _erreur_login(request, "Identifiants incorrects.")
 
-    _tentatives_login.pop(client, None)
+    _oublier_tentatives(client)
     reponse = RedirectResponse(url="/", status_code=303)
     reponse.set_cookie(
         NOM_COOKIE,
