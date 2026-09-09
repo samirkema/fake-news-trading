@@ -118,6 +118,44 @@ def test_detail_avec_mise_en_contexte_affiche_explication(client, db_session):
     assert "Explication de test bien visible" in reponse.text
 
 
+def test_detail_affiche_l_avertissement_persiste_pas_la_constante_du_code(client, db_session):
+    """US-04 contextualiseur : « cette mention est portée par la DONNÉE elle-même
+    (persistée en base), pas uniquement ajoutée a posteriori par le frontend ».
+
+    La colonne était écrite à chaque génération puis jamais relue : la page rendait
+    la constante du module. Conséquence concrète — reformuler `AVERTISSEMENT`
+    réécrivait rétroactivement l'avertissement de verdicts déjà rendus, ce que la
+    persistance existe précisément pour empêcher (cf. audit phase 10)."""
+    article = _inserer_article_avec_score(db_session, "avert-persiste", 90.0)
+    db_session.add(
+        MiseEnContexte(
+            article_id=article.id,
+            explication="Explication.",
+            faits_traces=[],
+            deductions_llm=[],
+            sources_utilisees=[],
+            niveau_confiance="faible",
+            avertissement="Avertissement tel que persiste au moment du verdict.",
+        )
+    )
+    db_session.flush()
+
+    texte = client.get(f"/articles/{article.id}").text
+
+    assert "Avertissement tel que persiste au moment du verdict." in texte
+    assert "Évaluation automatisée générée par algorithme" not in texte
+
+
+def test_detail_sans_mise_en_contexte_reprend_la_constante(client, db_session):
+    """Contre-épreuve : US-04 frontend veut l'avertissement sur CHAQUE page
+    affichant un score, y compris celles qui n'ont aucune mise en contexte."""
+    article = _inserer_article_avec_score(db_session, "avert-repli", 90.0)
+
+    texte = client.get(f"/articles/{article.id}").text
+
+    assert "Évaluation automatisée générée par algorithme" in texte
+
+
 def test_article_introuvable_retourne_404(client, db_session):
     import uuid
 

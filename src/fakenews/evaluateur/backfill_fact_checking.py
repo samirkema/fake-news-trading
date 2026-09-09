@@ -36,6 +36,7 @@ def backfiller_fact_checking(session: Session, client: httpx.Client | None = Non
     ferme_client = client is None
     client = client or httpx.Client(timeout=10.0)
     nb_traites = 0
+    nb_valides = 0
     decalage = 0
     try:
         while True:
@@ -70,12 +71,21 @@ def backfiller_fact_checking(session: Session, client: httpx.Client | None = Non
                 score.score_final = recalcul["score_final"]
                 score.non_evaluable = recalcul["non_evaluable"]
                 nb_traites += 1
+                # Clé absente, API indisponible ou aucune correspondance : le signal
+                # est réécrit mais reste exclu. Les compter comme « valides » faisait
+                # annoncer un rattrapage réussi après N échecs (cf. audit phase 10).
+                if resultat.get("valeur") is not None:
+                    nb_valides += 1
     finally:
         if ferme_client:
             client.close()
 
     session.commit()
-    logger.info("%d score(s) mis à jour avec un signal fact_checking valide", nb_traites)
+    logger.info(
+        "%d score(s) réévalué(s), dont %d ont produit un signal fact_checking "
+        "exploitable (%d sans correspondance ou en échec, signal resté exclu).",
+        nb_traites, nb_valides, nb_traites - nb_valides,
+    )
     return nb_traites
 
 

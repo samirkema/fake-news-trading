@@ -48,8 +48,27 @@ def evaluer_llm_bootstrap(titre: str, contenu: str, client=None) -> dict:
             f"Titre : {titre}\n\nContenu :\n{contenu[:4000]}"
         )
         resultat = appeler_structure(client, SYSTEM, prompt, SCHEMA)
+        valeur = float(resultat["score_suspicion"])
+        if not 0.0 <= valeur <= 100.0:
+            # Le `minimum`/`maximum` du SCHEMA est une CONSIGNE au modèle, pas une
+            # validation : rien côté API ne rejette une valeur hors bornes. Elle
+            # traversait donc `calculer_score_composite` (qui ne borne pas non plus,
+            # à raison — ce n'est pas sa responsabilité) jusqu'à la contrainte SQL
+            # `ck_scores_score_final_range`, où l'IntegrityError faisait échouer le
+            # `commit()` final de tout le run (cf. audit phase 10, P2).
+            #
+            # On EXCLUT plutôt qu'on n'écrête : un modèle qui répond 150 n'a pas
+            # compris la consigne, et ramener sa réponse à 100 fabriquerait une
+            # suspicion maximale à partir d'une erreur. Signal exclu = on ne sait
+            # pas, ce qui est la vérité.
+            logger.warning("score LLM hors bornes (%s) — signal exclu.", valeur)
+            return {
+                "valeur": None,
+                "raison": f"score LLM hors bornes ({valeur}) — réponse inexploitable",
+                "preuve_id": "llm_bootstrap",
+            }
         return {
-            "valeur": float(resultat["score_suspicion"]),
+            "valeur": valeur,
             "raison": resultat["justification"],
             "preuve_id": "llm_bootstrap",
         }

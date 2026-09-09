@@ -31,14 +31,55 @@ MOTS_CHARGES = {
     },
 }
 
-_MOTS_OUTILS_FR = {"le", "la", "les", "des", "une", "est", "et", "de", "du", "un"}
+# Mots-outils propres à CHAQUE langue (aucun mot présent dans les deux : « a », « on »,
+# « en », « son » sont donc volontairement absents — ils ne discriminent rien).
+_MOTS_OUTILS = {
+    "fr": {
+        "le", "la", "les", "des", "une", "un", "est", "et", "de", "du", "que",
+        "qui", "pour", "dans", "sur", "avec", "par", "plus", "ne", "pas", "aux",
+        "ce", "cette", "ses", "leur", "leurs", "vous", "nous", "ils", "elles",
+        "mais", "donc", "sont", "apres", "après", "selon", "contre", "sans",
+    },
+    "en": {
+        "the", "of", "and", "to", "in", "is", "that", "it", "for", "with", "as",
+        "was", "are", "this", "be", "by", "from", "at", "have", "has", "not",
+        "they", "you", "but", "his", "her", "its", "will", "said", "after",
+    },
+}
+
+_ACCENTS_FR = re.compile(r"[àâéèêëïîôùûç]")
+
+# Liens de toute forme (markdown Reddit, URL nue, reliquat d'attribut HTML).
+_URL = re.compile(r"https?://\S+|www\.\S+")
 
 
 def _detecter_langue(texte: str) -> str:
-    """Détection minimale (mots-outils français fréquents vs repli anglais) — cf.
-    US-01 scraper, couverture au moins anglophone/francophone."""
-    mots = set(re.findall(r"[a-zàâäéèêëïîôöùûüç]+", texte.lower()))
-    return "fr" if len(mots & _MOTS_OUTILS_FR) >= 2 else "en"
+    """Compare le poids des mots-outils français et anglais — cf. US-01 scraper,
+    couverture au moins anglophone/francophone.
+
+    Deux défauts de la version précédente sont corrigés ici (cf. audit phase 10, P3) :
+
+    - elle ne comptait QUE le français (dix mots-outils, seuil de deux) et repliait
+      sur l'anglais dans tous les autres cas. Un titre de presse français court
+      (« Scandale : trois ministres démissionnent ») n'atteint pas ce seuil et se
+      voyait donc appliquer le lexique ANGLAIS, rendant tout le volet
+      sensationnalisme francophone inopérant sur les textes courts — c'est-à-dire
+      sur les titres, là où le putaclic se joue ;
+    - elle dédupliquait les mots (`set`) avant de compter, ce qui effaçait
+      l'information la plus utile : « le » répété six fois pesait autant qu'une
+      occurrence unique.
+
+    On compare désormais deux poids, sur les OCCURRENCES. En cas d'égalité — un
+    texte très court peut n'avoir aucun mot-outil — les caractères accentués
+    tranchent : ils sont un marqueur français fort et quasi absents de l'anglais."""
+    mots = re.findall(r"[a-zàâäéèêëïîôöùûüç]+", texte.lower())
+    poids = {
+        langue: sum(1 for mot in mots if mot in liste)
+        for langue, liste in _MOTS_OUTILS.items()
+    }
+    if poids["fr"] == poids["en"]:
+        return "fr" if _ACCENTS_FR.search(texte.lower()) else "en"
+    return max(poids, key=poids.get)
 
 
 # En deçà, un corps de texte est trop court pour que l'absence de citation
@@ -83,9 +124,16 @@ def evaluer_style(titre: str, contenu: str, auteur: str | None) -> dict:
         signaux.append("aucun auteur identifiable")
         penalite += 20.0
 
-    corps_jugeable = len(contenu.strip()) >= LONGUEUR_MIN_POUR_CITATION
+    # Les URL sont retirées AVANT la recherche de citation et AVANT la mesure de
+    # longueur (cf. audit phase 10, P4). Une URL entre guillemets — un lien markdown
+    # dans un `selftext` Reddit, un attribut `href` qu'un flux mal nettoyé aurait
+    # laissé passer — satisfait `"[^"]{10,}"` sans être une citation. Et un corps
+    # réduit à une liste de liens n'a pas de prose à juger : c'est ce qui reste après
+    # retrait qui décide s'il est assez long.
+    corps_analysable = _URL.sub(" ", contenu).strip()
+    corps_jugeable = len(corps_analysable) >= LONGUEUR_MIN_POUR_CITATION
     if corps_jugeable:
-        a_une_citation = bool(re.search(r'"[^"]{10,}"|«[^»]{10,}»', contenu))
+        a_une_citation = bool(re.search(r'"[^"]{10,}"|«[^»]{10,}»', corps_analysable))
         if not a_une_citation:
             signaux.append("aucune citation ou source nommée détectée")
             penalite += 15.0
@@ -94,15 +142,18 @@ def evaluer_style(titre: str, contenu: str, auteur: str | None) -> dict:
         signaux.append("ponctuation excessive dans le titre")
         penalite += 15.0
 
-    langue = _detecter_langue(f"{titre} {contenu}")
-    texte_normalise = f"{titre} {contenu}".lower()
+    # Langue et vocabulaire jugés sur le texte débarrassé de ses URL, pour la même
+    # raison : un nom de domaine n'est ni un mot-outil ni un marqueur de ton.
+    texte_analysable = f"{titre} {corps_analysable}"
+    langue = _detecter_langue(texte_analysable)
+    texte_normalise = texte_analysable.lower()
     mots_trouves = sorted(m for m in MOTS_CHARGES[langue] if m in texte_normalise)
     if mots_trouves:
         signaux.append(f"vocabulaire à forte charge émotionnelle ({', '.join(mots_trouves[:3])})")
         penalite += min(30.0, 10.0 * len(mots_trouves))
 
     if not signaux:
-        if not contenu.strip() and len(titre.strip()) < LONGUEUR_MIN_TITRE_JUGEABLE:
+        if not corps_analysable and len(titre.strip()) < LONGUEUR_MIN_TITRE_JUGEABLE:
             return {
                 "valeur": None,
                 "raison": (

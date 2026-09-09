@@ -3,9 +3,15 @@
 
 import logging
 
+from fakenews.config import SEUIL_SUSPICION_PAR_DEFAUT
+
 logger = logging.getLogger(__name__)
 
-SEUIL_PAR_DEFAUT = 60.0
+# Le seuil vit dans `fakenews.config` : le frontend en a besoin lui aussi, et il ne
+# doit pas l'importer d'ici (cf. audit phase 10 — « les blocs ne s'appellent pas
+# entre eux », doc/V0/architecture.md). Réexporté sous son ancien nom pour rester
+# lisible depuis ce module, qui est celui qui l'APPLIQUE.
+SEUIL_PAR_DEFAUT = SEUIL_SUSPICION_PAR_DEFAUT
 PLAFOND_APPELS_PAR_DEFAUT = 20
 
 
@@ -34,8 +40,15 @@ def articles_a_traiter(scores: list[dict], seuil: float = SEUIL_PAR_DEFAUT, plaf
     if plafond is not None:
         candidats = candidats[:plafond]
 
+    # Journal volontairement modeste sur son dénominateur : cette fonction ne voit
+    # que la liste qu'on lui passe, pas le corpus scoré. Elle affirmait « sur N
+    # scoré(s) CETTE SEMAINE » alors que sa propre docstring explique que l'appelant
+    # lui remet le backlog complet — deux phrases contradictoires dans le même
+    # fichier. Le comptage exigé par US-01 (« traités vs. total scoré par
+    # l'évaluateur ») est produit par `selectionner_articles_a_traiter`, qui a
+    # l'accès base pour le calculer honnêtement (cf. audit phase 10).
     logger.info(
-        "%d article(s) à traiter sur %d scoré(s) cette semaine (seuil=%.1f%s)",
+        "%d article(s) retenu(s) parmi %d candidat(s) fourni(s) (seuil=%.1f%s)",
         len(candidats),
         len(scores),
         seuil,

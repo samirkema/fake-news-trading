@@ -276,7 +276,12 @@ def evaluer_source_primaire(
         logger.warning("extraction NER échouée, signal exclu : %s", exc)
         return {
             "valeur": None,
-            "raison": f"extraction d'entreprise indisponible ({exc})",
+            # Type seul, comme partout ailleurs : `raison` est persistée dans
+            # `scores.sous_scores` puis rendue dans le frontend. Ce site-ci avait été
+            # oublié par le correctif du finding H2, qui a traité les trois autres du
+            # même fichier — le message brut de spaCy cite le chemin d'installation
+            # du modèle, donc l'arborescence du serveur (cf. audit phase 10).
+            "raison": f"extraction d'entreprise indisponible ({type(exc).__name__})",
             "preuve_id": "source_primaire",
         }
 

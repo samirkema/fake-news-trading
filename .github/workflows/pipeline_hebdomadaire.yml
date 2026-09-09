@@ -11,6 +11,11 @@ name: Pipeline hebdomadaire
 jobs:
   pipeline:
     runs-on: ubuntu-latest
+    # Le raisonnement était fait sans la borne : run_evaluateur.py justifie son
+    # plafond d'articles par « exposé au timeout GitHub Actions », mais aucun
+    # timeout n'était déclaré — le défaut de la plateforme est 6 h, soit 6 h de
+    # runner consommées avant qu'un blocage ne se voie (cf. audit phase 10).
+    timeout-minutes: 60
     env:
       PYTHONPATH: src
       DATABASE_URL: ${{ secrets.DATABASE_URL }}

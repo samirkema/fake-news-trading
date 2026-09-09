@@ -4,6 +4,7 @@ qu'ils s'appellent entre eux (cf. doc/architecture.md, "pas d'appel direct entre
 les blocs"). Fournisseur choisi : Claude (cf. doc/plan_implementation.md)."""
 
 import os
+import re
 
 import anthropic
 
@@ -34,11 +35,18 @@ CONSIGNE_CONTENU_NON_FIABLE = (
 )
 
 
+# Toute balise fermante du cadre, quelle que soit sa casse ou son espacement.
+# `str.replace` sur la chaîne exacte laissait passer `</contenu_non_fiable >` et
+# `</CONTENU_NON_FIABLE>` : le garde-fou annoncé comme mécanique redevenait une
+# affaire de discipline du modèle (cf. audit phase 10).
+_BALISE_FERMANTE = re.compile(r"</\s*contenu_non_fiable\s*>", re.IGNORECASE)
+
+
 def encadrer_contenu_non_fiable(texte: str) -> str:
     """Délimite du contenu tiers pour l'injecter dans un prompt. Neutralise les
     balises fermantes que le texte contiendrait, sans quoi il suffirait d'écrire
     </contenu_non_fiable> pour sortir du cadre et s'adresser au modèle."""
-    neutralise = texte.replace("</contenu_non_fiable>", "</contenu_non_fiable_>")
+    neutralise = _BALISE_FERMANTE.sub("</contenu_non_fiable_>", texte)
     return f"<contenu_non_fiable>\n{neutralise}\n</contenu_non_fiable>"
 
 

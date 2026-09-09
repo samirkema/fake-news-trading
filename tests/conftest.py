@@ -93,7 +93,17 @@ def db_session():
         pytest.skip(f"base de test injoignable ({url}): {exc}")
 
     transaction = connection.begin()
-    Session = sessionmaker(bind=connection)
+    # `join_transaction_mode="create_savepoint"` : le code applicatif commite et
+    # annule pour de vrai (c'est son comportement en production qu'on teste), mais
+    # sur un POINT DE SAUVEGARDE imbriqué — la transaction externe du test survit et
+    # peut toujours tout annuler à la fin.
+    #
+    # Sans ce mode, un `session.rollback()` applicatif — celui de `_commiter_le_lot`
+    # quand la base refuse un lot — annulait la transaction du test elle-même, que
+    # la fixture tentait ensuite d'annuler à son tour (« transaction already
+    # deassociated from connection »). Le test passait, mais son isolation ne tenait
+    # plus qu'à la chance.
+    Session = sessionmaker(bind=connection, join_transaction_mode="create_savepoint")
     session = Session()
     try:
         yield session

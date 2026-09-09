@@ -18,6 +18,16 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 PLATEFORMES = ("rss", "reddit")
 
 
+def _liste_sql(valeurs) -> str:
+    """Liste SQL `('a', 'b')` à partir d'un tuple Python.
+
+    `f"in {tuple_python}"` s'appuyait sur le `repr` d'un tuple : correct à deux ou
+    trois éléments, il produit `in ('rss',)` — syntaxiquement invalide — dès qu'il
+    n'en reste qu'un. Une contrainte de schéma ne doit pas dépendre d'un détail de
+    formatage de Python (cf. audit phase 10)."""
+    return "(" + ", ".join(f"'{v}'" for v in valeurs) + ")"
+
+
 class Base(DeclarativeBase):
     pass
 
@@ -46,7 +56,7 @@ class Article(Base):
     mise_en_contexte: Mapped["MiseEnContexte | None"] = relationship(back_populates="article", uselist=False)
 
     __table_args__ = (
-        CheckConstraint(f"plateforme in {PLATEFORMES}", name="ck_articles_plateforme"),
+        CheckConstraint(f"plateforme in {_liste_sql(PLATEFORMES)}", name="ck_articles_plateforme"),
         UniqueConstraint("url_canonique", name="uq_articles_url_canonique"),
     )
 
@@ -116,7 +126,7 @@ class Compte(Base):
     date_creation: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
-        CheckConstraint(f"role in {ROLES}", name="ck_comptes_role"),
+        CheckConstraint(f"role in {_liste_sql(ROLES)}", name="ck_comptes_role"),
     )
 
 

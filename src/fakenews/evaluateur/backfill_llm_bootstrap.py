@@ -11,6 +11,7 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from fakenews.config import entier_depuis_env
 from fakenews.db import SessionLocal
 from fakenews.evaluateur.llm_bootstrap import evaluer_llm_bootstrap
 from fakenews.evaluateur.score import POIDS_PAR_DEFAUT, calculer_score_composite
@@ -32,7 +33,18 @@ def _sans_llm_valide(score: Score) -> bool:
 TAILLE_LOT = 200
 
 
-def backfiller_llm_bootstrap(session: Session, client=None) -> int:
+# US-07 exige que « le nombre d'appels LLM par run soit plafonné (valeur
+# configurable) ». Le run hebdomadaire respectait ce plafond ; ce backfill, qui
+# appelle la MÊME API payante sur toute la table `scores`, n'en avait aucun (cf.
+# audit phase 10). Un déclenchement manuel sur un gros backlog consommait donc un
+# budget non borné, sur un projet dont la fiche pose un plafond de 20 €/mois.
+PLAFOND_APPELS_PAR_DEFAUT = 100
+NOM_ENV_PLAFOND = "LLM_PLAFOND_BACKFILL"
+
+
+def backfiller_llm_bootstrap(session: Session, client=None, plafond: int | None = None) -> int:
+    if plafond is None:
+        plafond = entier_depuis_env(NOM_ENV_PLAFOND, PLAFOND_APPELS_PAR_DEFAUT)
     if client is None:
         # Même protection que run_evaluateur : ANTHROPIC_API_KEY absente ne doit pas
         # produire une trace brute d'exception (cf. audit, finding M12).
@@ -43,8 +55,9 @@ def backfiller_llm_bootstrap(session: Session, client=None) -> int:
             return 0
 
     nb_traites = 0
+    nb_valides = 0
     decalage = 0
-    while True:
+    while nb_traites < plafond:
         lot = (
             session.execute(select(Score).order_by(Score.id).limit(TAILLE_LOT).offset(decalage))
             .scalars()
@@ -54,6 +67,12 @@ def backfiller_llm_bootstrap(session: Session, client=None) -> int:
             break
         decalage += len(lot)
         for score in lot:
+            if nb_traites >= plafond:
+                logger.warning(
+                    "Plafond de %d appel(s) atteint — reliquat reporté à un prochain "
+                    "déclenchement (%s pour l'ajuster).", plafond, NOM_ENV_PLAFOND,
+                )
+                break
             if not _sans_llm_valide(score):
                 continue
             article = session.get(Article, score.article_id)
@@ -78,9 +97,19 @@ def backfiller_llm_bootstrap(session: Session, client=None) -> int:
             score.score_final = recalcul["score_final"]
             score.non_evaluable = recalcul["non_evaluable"]
             nb_traites += 1
+            # Un appel raté produit `valeur: None` : le score est bien réécrit, mais
+            # le signal reste exclu. Les compter ensemble faisait annoncer « N score(s)
+            # mis à jour avec un signal VALIDE » après N échecs d'affilée — un rapport
+            # qui décrit le contraire de ce qui s'est passé (cf. audit phase 10).
+            if resultat.get("valeur") is not None:
+                nb_valides += 1
 
     session.commit()
-    logger.info("%d score(s) mis à jour avec un signal llm_bootstrap valide", nb_traites)
+    logger.info(
+        "%d appel(s) LLM sur un plafond de %d, dont %d ont produit un signal "
+        "exploitable (%d échec(s), signal resté exclu).",
+        nb_traites, plafond, nb_valides, nb_traites - nb_valides,
+    )
     return nb_traites
 
 

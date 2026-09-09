@@ -23,15 +23,37 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from fakenews.config import seuil_suspicion
 from fakenews.contextualiseur.avertissement import AVERTISSEMENT
-from fakenews.contextualiseur.declenchement import SEUIL_PAR_DEFAUT
 from fakenews.db import SessionLocal
 from fakenews.models import Article, Compte, MiseEnContexte, Score
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Fake News — Détection")
+# Documentation interactive désactivée (cf. audit phase 10). FastAPI expose par
+# défaut /docs, /redoc et /openapi.json SANS passer par les dépendances des routes :
+# `compte_courant` ne les protège pas. Sur un déploiement dont US-04 frontend fait
+# de l'authentification une « condition bloquante », trois URL publiques décrivant
+# les routes, leurs paramètres et le formulaire de connexion sont une surface
+# offerte pour rien — le frontend n'a aucun consommateur d'API.
+app = FastAPI(title="Fake News — Détection", docs_url=None, redoc_url=None, openapi_url=None)
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+# Seuil de la liste par défaut, résolu AU CHARGEMENT DU MODULE — pas à chaque
+# requête (cf. audit phase 10, vérifié de bout en bout) :
+#
+# - une valeur illisible ou hors bornes doit faire échouer le DÉMARRAGE, avec le
+#   message de `fakenews.config` : sur Vercel le déploiement passe au rouge, ce qui
+#   se voit. Résolue par requête, la même faute de frappe levait un `SystemExit`
+#   à l'intérieur d'un gestionnaire ASGI — ce qui ne produit pas une erreur lisible
+#   mais casse le groupe de tâches du serveur, page par page ;
+# - un changement de variable d'environnement sur Vercel provoque de toute façon un
+#   redéploiement : relire à chaque requête n'apportait aucune souplesse réelle.
+#
+# Même variable et même défaut que le contextualiseur, via `fakenews.config` : les
+# deux blocs doivent délimiter le même ensemble d'articles, sans s'appeler l'un
+# l'autre (doc/V0/architecture.md).
+SEUIL_LISTE = seuil_suspicion()
 
 ARTICLES_PAR_PAGE = 50
 NOM_COOKIE = "session"
@@ -493,7 +515,7 @@ def liste_articles(
     score_min = _parser_score_min(score_min_brut)
     date_min = _parser_date(date_min_brut, "date_min")
     date_max = _parser_date(date_max_brut, "date_max")
-    seuil_effectif = score_min if score_min is not None else (None if tous else SEUIL_PAR_DEFAUT)
+    seuil_effectif = score_min if score_min is not None else (None if tous else SEUIL_LISTE)
 
     stmt = select(Article, Score).join(Score, Score.article_id == Article.id).where(Score.non_evaluable.is_(False))
     if seuil_effectif is not None:
@@ -560,6 +582,16 @@ def detail_article(
             "article": article,
             "score": score,
             "mise_en_contexte": mise_en_contexte,
-            "avertissement": AVERTISSEMENT,
+            # US-04 contextualiseur : « cette mention est portée par la DONNÉE
+            # elle-même (persistée en base), pas uniquement ajoutée a posteriori par
+            # le frontend ». La colonne `mise_en_contexte.avertissement` était
+            # écrite à chaque génération puis jamais relue : la page affichait la
+            # constante du code, si bien qu'un changement de formulation aurait
+            # réécrit l'avertissement de verdicts déjà rendus — exactement ce que
+            # la persistance est censée empêcher (cf. audit phase 10).
+            # Repli sur la constante quand aucune mise en contexte n'existe, pour
+            # tenir US-04 frontend (« chaque page affichant un score reprend
+            # l'avertissement »).
+            "avertissement": mise_en_contexte.avertissement if mise_en_contexte else AVERTISSEMENT,
         },
     )

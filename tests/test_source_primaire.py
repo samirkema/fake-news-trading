@@ -289,6 +289,30 @@ def test_echec_sec_ne_recopie_pas_le_message_d_exception():
     assert "ConnectError" in resultat["raison"]
 
 
+def test_echec_ner_ne_recopie_pas_non_plus_le_message_d_exception():
+    """Même exigence que le test précédent, sur l'AUTRE chemin d'échec du module.
+
+    Le correctif du finding H2 avait traité trois sites sur quatre : celui-ci
+    interpolait encore `{exc}` brut dans `raison`, donc en base puis à l'écran. Une
+    exception spaCy cite le chemin d'installation du modèle, c'est-à-dire
+    l'arborescence du serveur (cf. audit phase 10)."""
+
+    class _NlpQuiEchoue:
+        def __call__(self, texte):
+            raise OSError("[E050] Can't find model at /home/deploy/.venv/lib/en_core_web_sm")
+
+    resultat = evaluer_source_primaire(
+        "Tesla annonce un rappel massif",
+        "Contenu",
+        datetime(2026, 1, 5, tzinfo=timezone.utc),
+        nlp=_NlpQuiEchoue(),
+    )
+    assert resultat["valeur"] is None
+    assert "/home/deploy" not in resultat["raison"]
+    assert "en_core_web_sm" not in resultat["raison"]
+    assert "OSError" in resultat["raison"]
+
+
 def test_echec_sec_edgar_degrade_en_valeur_none():
     nlp = _NlpFactice([_EntiteFactice("Tesla", "ORG")])
     resultat = evaluer_source_primaire(

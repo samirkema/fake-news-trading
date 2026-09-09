@@ -14,6 +14,7 @@ import httpx
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from fakenews.config import entier_depuis_env
 from fakenews.db import SessionLocal
 from fakenews.evaluateur.fact_checking import evaluer_fact_checking
 from fakenews.evaluateur.llm_bootstrap import evaluer_llm_bootstrap
@@ -35,6 +36,37 @@ PLAFOND_APPELS_LLM_PAR_DEFAUT = 50
 # (cf. audit, finding M9). Le reliquat est traité au run suivant — les articles
 # non scorés restent sélectionnés tant qu'ils n'ont pas de Score.
 PLAFOND_ARTICLES_PAR_DEFAUT = 300
+
+# Un seul `commit()` en fin de run rendait l'écriture tout-ou-rien : un article
+# refusé par une contrainte (un score LLM hors bornes, cf. llm_bootstrap) faisait
+# perdre les 299 autres — et avec eux les appels réseau et LLM déjà PAYÉS pour les
+# produire (cf. audit phase 10, P2). On commite par tranches : le dégât maximal
+# passe de 300 articles à 25, et les articles perdus restent sans Score, donc
+# resélectionnés au run suivant.
+TAILLE_LOT_COMMIT = 25
+
+
+def _commiter_le_lot(session: Session, identifiants: list) -> int:
+    """Persiste le lot courant. Retourne le nombre d'articles réellement écrits.
+
+    Un échec n'interrompt pas le run : on annule la transaction, on nomme les
+    articles perdus (ils n'ont pas de Score, donc le prochain run les reprendra) et
+    on continue — conforme à « dégrader, jamais bloquer » (doc/V0/architecture.md),
+    qui n'était appliqué qu'aux appels externes, pas à l'écriture."""
+    if not identifiants:
+        return 0
+    try:
+        session.commit()
+        return len(identifiants)
+    except Exception as exc:
+        session.rollback()
+        logger.error(
+            "Écriture d'un lot de %d score(s) refusée (%s) — articles non scorés, "
+            "repris au prochain run : %s",
+            len(identifiants), type(exc).__name__,
+            ", ".join(str(i) for i in identifiants),
+        )
+        return 0
 
 
 def evaluer_articles_non_scores(
@@ -88,6 +120,8 @@ def evaluer_articles_non_scores(
     )
 
     nb_appels_llm = 0
+    nb_persistes = 0
+    lot = []
     try:
         for article in articles:
             sous_scores = {
@@ -124,37 +158,25 @@ def evaluer_articles_non_scores(
                     non_evaluable=resultat["non_evaluable"],
                 )
             )
+            lot.append(article.id)
+            if len(lot) >= TAILLE_LOT_COMMIT:
+                nb_persistes += _commiter_le_lot(session, lot)
+                lot = []
     finally:
         client_fact_checking.close()
         client_sec_edgar.close()
 
-    session.commit()
-    logger.info("%d article(s) évalué(s), %d appel(s) LLM bootstrap", len(articles), nb_appels_llm)
-    return len(articles)
-
-
-def _plafond_depuis_env(nom: str, defaut: int) -> int:
-    """Un plafond mal saisi doit échouer, mais avec un diagnostic. `int()` nu levait
-    une ValueError qui ne nommait ni la variable ni la valeur attendue
-    (cf. audit phase 7, finding N10)."""
-    brut = os.environ.get(nom)
-    if brut is None or brut.strip() == "":
-        return defaut
-    try:
-        valeur = int(brut)
-    except ValueError:
-        raise SystemExit(
-            f"{nom}={brut!r} n'est pas un entier. Corriger la variable "
-            f"d'environnement, ou la retirer pour reprendre le défaut ({defaut})."
-        )
-    if valeur < 0:
-        raise SystemExit(f"{nom}={valeur} doit être positif ou nul.")
-    return valeur
+    nb_persistes += _commiter_le_lot(session, lot)
+    logger.info(
+        "%d/%d article(s) évalué(s) et persisté(s), %d appel(s) LLM bootstrap",
+        nb_persistes, len(articles), nb_appels_llm,
+    )
+    return nb_persistes
 
 
 def main():
-    plafond = _plafond_depuis_env("LLM_PLAFOND_EVALUATEUR", PLAFOND_APPELS_LLM_PAR_DEFAUT)
-    plafond_articles = _plafond_depuis_env(
+    plafond = entier_depuis_env("LLM_PLAFOND_EVALUATEUR", PLAFOND_APPELS_LLM_PAR_DEFAUT)
+    plafond_articles = entier_depuis_env(
         "EVALUATEUR_PLAFOND_ARTICLES", PLAFOND_ARTICLES_PAR_DEFAUT
     )
     with SessionLocal() as session:

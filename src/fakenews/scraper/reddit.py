@@ -83,7 +83,14 @@ def collecter_reddit(session: Session, client: "praw.Reddit | None" = None) -> d
         compteurs = {"ajoutes": 0, "mis_a_jour": 0, "ignores": 0}
         for submission in posts:
             try:
-                resultat = enregistrer_ou_mettre_a_jour(session, normaliser_submission(submission, nom_subreddit))
+                # Point de sauvegarde par post : sans lui, une écriture refusée par
+                # la base laissait la session en attente de rollback, et TOUS les
+                # posts suivants échouaient en cascade sur `PendingRollbackError`
+                # plutôt que sur leur propre cause — le `except` ci-dessous les
+                # comptait alors comme « ignorés » sans que rien ne dise pourquoi
+                # (cf. audit phase 10, symétrique du correctif rss.py).
+                with session.begin_nested():
+                    resultat = enregistrer_ou_mettre_a_jour(session, normaliser_submission(submission, nom_subreddit))
             except Exception as exc:
                 logger.warning("post ignoré (r/%s): %s", nom_subreddit, exc)
                 compteurs["ignores"] += 1

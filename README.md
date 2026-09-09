@@ -36,6 +36,16 @@ Détails complets : [doc/V0/architecture.md](doc/V0/architecture.md) et [doc/V0/
 - **Automatisation** : les trois premiers blocs sont orchestrés en un workflow GitHub Actions (`.github/workflows/pipeline_hebdomadaire.yml`). ⚠️ **Le déclenchement automatique est actuellement désactivé** (projet en pause : le `schedule` est commenté pour ne pas consommer la clé Anthropic). Le workflow ne tourne que sur déclenchement manuel — les données ne se rafraîchissent donc pas toutes seules.
 - **CI** : `.github/workflows/ci.yml` lance la suite de tests sur chaque push et chaque PR, contre un vrai Postgres avec les migrations appliquées, et échoue si un test est skippé.
 
+Deux familles de tests jouent des rôles distincts, à ne pas confondre :
+
+| Fichier | Ce qu'il garde |
+|---|---|
+| `tests/test_correctifs_audit.py` | les correctifs d'audit **déjà passés** — anti-régression |
+| `tests/test_conformite_exigences.py` | les **critères d'acceptation** des user stories — un critère non tenu est un test rouge |
+| `tests/test_signaux_corpus_reel.py` + `tests/corpus/` | les signaux face à des **entrées réelles** (verdicts de fact-checkers, titres de presse, HTML de flux) |
+
+La troisième famille existe parce que les défauts les plus graves trouvés jusqu'ici étaient invisibles aux fixtures synthétiques : `"False"` et `"True"` passaient, c'est `"Inaccurate"` qui inversait le verdict.
+
 Historique des audits menés sur ce projet : [doc/audit/](doc/audit/).
 
 ## Installation
@@ -60,6 +70,9 @@ Copier `.env.example` en `.env` et renseigner :
 - `FRONTEND_PASSWORD` — mot de passe partagé, obligatoire en déploiement hébergé. **Non défini = accès refusé**, pas « accès libre » : le défaut est fermé. À la connexion l'utilisateur saisit aussi un pseudo qui détermine son rôle via la table `comptes` (fondation V1, voir [doc/V1/comptes-3-roles.md](doc/V1/comptes-3-roles.md))
 - `FAKENEWS_MODE=local` — développement uniquement, désactive l'authentification du frontend. À ne jamais définir en hébergé
 - `FAKENEWS_PROXYS_DE_CONFIANCE` — nombre de proxys devant l'application, pour le plafond anti-bruteforce de `/login`. **`1` sur Vercel** ; non définie ailleurs tant que la topologie n'a pas été constatée (`X-Forwarded-For` est alors ignoré, ce qui est le défaut sûr)
+- `CONTEXTUALISEUR_SEUIL` — seuil de suspicion 0-100 (défaut `60`). **Lu par le contextualiseur ET par le frontend** : les régler différemment ferait lister des articles dont la mise en contexte n'a jamais été demandée. Une valeur hors bornes fait échouer le démarrage plutôt que de vider la liste en silence
+- `LLM_PLAFOND_CONTEXTUALISEUR` — appels LLM du contextualiseur par run (défaut `20`), distinct de `LLM_PLAFOND_EVALUATEUR` : un appel d'explication coûte plus cher qu'un appel de scoring court
+- `LLM_PLAFOND_BACKFILL` — appels LLM des scripts de backfill (défaut `100`)
 
 Appliquer le schéma de base de données (migrations dans l'ordre) :
 
