@@ -18,6 +18,16 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 PLATEFORMES = ("rss", "reddit")
 
 
+def _liste_sql(valeurs) -> str:
+    """Liste SQL `('a', 'b')` à partir d'un tuple Python.
+
+    `f"in {tuple_python}"` s'appuyait sur le `repr` d'un tuple : correct à deux ou
+    trois éléments, il produit `in ('rss',)` — syntaxiquement invalide — dès qu'il
+    n'en reste qu'un. Une contrainte de schéma ne doit pas dépendre d'un détail de
+    formatage de Python (cf. audit phase 10)."""
+    return "(" + ", ".join(f"'{v}'" for v in valeurs) + ")"
+
+
 class Base(DeclarativeBase):
     pass
 
@@ -37,7 +47,8 @@ class Article(Base):
     url_canonique: Mapped[str] = mapped_column(Text, nullable=False)
     hash_contenu: Mapped[str] = mapped_column(Text, nullable=False)
     plateforme: Mapped[str] = mapped_column(String(20), nullable=False)
-    # ex. reddit: {"subreddit", "upvotes", "nb_commentaires"} ; toute plateforme: {"gdelt_event_id"}
+    # ex. reddit: {"subreddit", "score", "nb_commentaires"} ("score" = upvotes nets,
+    # nom du champ PRAW, cf. scraper/reddit.py) ; toute plateforme: {"gdelt_event_id"}
     metadonnees: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     date_collecte: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -45,7 +56,7 @@ class Article(Base):
     mise_en_contexte: Mapped["MiseEnContexte | None"] = relationship(back_populates="article", uselist=False)
 
     __table_args__ = (
-        CheckConstraint(f"plateforme in {PLATEFORMES}", name="ck_articles_plateforme"),
+        CheckConstraint(f"plateforme in {_liste_sql(PLATEFORMES)}", name="ck_articles_plateforme"),
         UniqueConstraint("url_canonique", name="uq_articles_url_canonique"),
     )
 
@@ -66,6 +77,11 @@ class Score(Base):
     sous_scores: Mapped[dict] = mapped_column(JSONB, nullable=False)
     # poids réellement appliqués à ce calcul (traçabilité, cf. US-08 évaluateur)
     poids: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+    # Contribution de chaque signal au score final : {signal: {valeur, poids, exclu}}.
+    # Exigé explicitement par US-08 évaluateur ; NULL pour les scores calculés avant
+    # l'ajout de la colonne (migration 0003, pas de rescoring rétroactif).
+    detail_calcul: Mapped[dict | None] = mapped_column(JSONB)
 
     score_final: Mapped[float | None] = mapped_column(Numeric(5, 2))
     non_evaluable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -110,7 +126,7 @@ class Compte(Base):
     date_creation: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
-        CheckConstraint(f"role in {ROLES}", name="ck_comptes_role"),
+        CheckConstraint(f"role in {_liste_sql(ROLES)}", name="ck_comptes_role"),
     )
 
 

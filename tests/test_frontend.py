@@ -1,14 +1,21 @@
-from datetime import datetime, timezone
+import re
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import func, select
 
 from fakenews.frontend.app import app, get_session
 from fakenews.models import Article, MiseEnContexte, Score
 
 
 @pytest.fixture
-def client(db_session):
+def client(db_session, monkeypatch):
+    # Mode local EXPLICITE par défaut : les tests de rendu (liste, détail, filtres,
+    # pagination) n'ont pas à traverser l'authentification. Les tests d'auth
+    # appellent `mode_heberge(...)` dans leur corps, ce qui s'exécute après cette
+    # fixture et bascule donc bien en mode hébergé.
+    monkeypatch.setenv("FAKENEWS_MODE", "local")
     app.dependency_overrides[get_session] = lambda: db_session
     yield TestClient(app)
     app.dependency_overrides.clear()
@@ -111,6 +118,44 @@ def test_detail_avec_mise_en_contexte_affiche_explication(client, db_session):
     assert "Explication de test bien visible" in reponse.text
 
 
+def test_detail_affiche_l_avertissement_persiste_pas_la_constante_du_code(client, db_session):
+    """US-04 contextualiseur : « cette mention est portée par la DONNÉE elle-même
+    (persistée en base), pas uniquement ajoutée a posteriori par le frontend ».
+
+    La colonne était écrite à chaque génération puis jamais relue : la page rendait
+    la constante du module. Conséquence concrète — reformuler `AVERTISSEMENT`
+    réécrivait rétroactivement l'avertissement de verdicts déjà rendus, ce que la
+    persistance existe précisément pour empêcher (cf. audit phase 10)."""
+    article = _inserer_article_avec_score(db_session, "avert-persiste", 90.0)
+    db_session.add(
+        MiseEnContexte(
+            article_id=article.id,
+            explication="Explication.",
+            faits_traces=[],
+            deductions_llm=[],
+            sources_utilisees=[],
+            niveau_confiance="faible",
+            avertissement="Avertissement tel que persiste au moment du verdict.",
+        )
+    )
+    db_session.flush()
+
+    texte = client.get(f"/articles/{article.id}").text
+
+    assert "Avertissement tel que persiste au moment du verdict." in texte
+    assert "Évaluation automatisée générée par algorithme" not in texte
+
+
+def test_detail_sans_mise_en_contexte_reprend_la_constante(client, db_session):
+    """Contre-épreuve : US-04 frontend veut l'avertissement sur CHAQUE page
+    affichant un score, y compris celles qui n'ont aucune mise en contexte."""
+    article = _inserer_article_avec_score(db_session, "avert-repli", 90.0)
+
+    texte = client.get(f"/articles/{article.id}").text
+
+    assert "Évaluation automatisée générée par algorithme" in texte
+
+
 def test_article_introuvable_retourne_404(client, db_session):
     import uuid
 
@@ -128,23 +173,23 @@ def test_avertissement_visible_sur_la_liste_et_le_detail(client, db_session):
     assert extrait in client.get(f"/articles/{article.id}").text
 
 
-def test_sans_cookie_redirige_vers_login_si_mot_de_passe_configure(client, monkeypatch):
-    monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
+def test_sans_cookie_redirige_vers_login_si_mot_de_passe_configure(client, monkeypatch, mode_heberge):
+    mode_heberge("secret")
     reponse = client.get("/", follow_redirects=False)
     assert reponse.status_code == 303
     assert reponse.headers["location"] == "/login"
 
 
-def test_page_login_a_un_champ_pseudo_et_mot_de_passe(client, monkeypatch):
-    monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
+def test_page_login_a_un_champ_pseudo_et_mot_de_passe(client, monkeypatch, mode_heberge):
+    mode_heberge("secret")
     reponse = client.get("/login")
     assert reponse.status_code == 200
     assert 'name="pseudo"' in reponse.text
     assert 'type="password"' in reponse.text
 
 
-def test_login_avec_pseudo_et_bon_mot_de_passe_donne_acces(client, monkeypatch):
-    monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
+def test_login_avec_pseudo_et_bon_mot_de_passe_donne_acces(client, monkeypatch, mode_heberge):
+    mode_heberge("secret")
 
     connexion = client.post(
         "/login", data={"pseudo": "alice", "mot_de_passe": "secret"}, follow_redirects=False
@@ -157,29 +202,29 @@ def test_login_avec_pseudo_et_bon_mot_de_passe_donne_acces(client, monkeypatch):
     assert reponse.status_code == 200
 
 
-def test_login_sans_pseudo_rejete(client, monkeypatch):
-    monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
+def test_login_sans_pseudo_rejete(client, monkeypatch, mode_heberge):
+    mode_heberge("secret")
     reponse = client.post("/login", data={"mot_de_passe": "secret"})
     assert reponse.status_code == 422  # champ de formulaire requis (FastAPI)
 
 
-def test_login_pseudo_invalide_rejete(client, monkeypatch):
-    monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
+def test_login_pseudo_invalide_rejete(client, monkeypatch, mode_heberge):
+    mode_heberge("secret")
     reponse = client.post("/login", data={"pseudo": "a b/c", "mot_de_passe": "secret"})
     assert reponse.status_code == 401
     assert "pseudo invalide" in reponse.text.lower()
 
 
-def test_login_avec_mauvais_mot_de_passe_refuse(client, monkeypatch):
-    monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
+def test_login_avec_mauvais_mot_de_passe_refuse(client, monkeypatch, mode_heberge):
+    mode_heberge("secret")
 
     reponse = client.post("/login", data={"pseudo": "alice", "mot_de_passe": "faux"})
     assert reponse.status_code == 401
     assert "incorrect" in reponse.text.lower()
 
 
-def test_cookie_falsifie_redirige_vers_login(client, monkeypatch):
-    monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
+def test_cookie_falsifie_redirige_vers_login(client, monkeypatch, mode_heberge):
+    mode_heberge("secret")
     # Cookie forgé : on garde une signature valide pour « alice » mais on prétend
     # être « samirkema » -> la signature ne correspond pas, accès refusé.
     from fakenews.frontend.app import _valeur_cookie
@@ -192,8 +237,8 @@ def test_cookie_falsifie_redirige_vers_login(client, monkeypatch):
     assert reponse.headers["location"] == "/login"
 
 
-def test_logout_supprime_l_acces(client, monkeypatch):
-    monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
+def test_logout_supprime_l_acces(client, monkeypatch, mode_heberge):
+    mode_heberge("secret")
     client.post("/login", data={"pseudo": "alice", "mot_de_passe": "secret"})
     assert client.get("/").status_code == 200
 
@@ -204,15 +249,15 @@ def test_logout_supprime_l_acces(client, monkeypatch):
 
 
 def test_pas_d_authentification_en_mode_local(client, monkeypatch):
-    monkeypatch.delenv("FRONTEND_PASSWORD", raising=False)
+    monkeypatch.setenv("FAKENEWS_MODE", "local")
     reponse = client.get("/")
     assert reponse.status_code == 200
 
 
-def test_superadmin_a_un_code_distinct_du_mot_de_passe_partage(client, db_session, monkeypatch):
+def test_superadmin_a_un_code_distinct_du_mot_de_passe_partage(client, db_session, monkeypatch, mode_heberge):
     from sqlalchemy import text
 
-    monkeypatch.setenv("FRONTEND_PASSWORD", "partage")
+    mode_heberge("partage")
     db_session.execute(
         text(
             "update comptes set secret_hash = crypt('code-samir', gen_salt('bf')) "
@@ -235,10 +280,10 @@ def test_superadmin_a_un_code_distinct_du_mot_de_passe_partage(client, db_sessio
     assert client.get("/").status_code == 200
 
 
-def test_mot_de_passe_partage_reste_valable_pour_les_autres_pseudos(client, db_session, monkeypatch):
+def test_mot_de_passe_partage_reste_valable_pour_les_autres_pseudos(client, db_session, monkeypatch, mode_heberge):
     from sqlalchemy import text
 
-    monkeypatch.setenv("FRONTEND_PASSWORD", "partage")
+    mode_heberge("partage")
     db_session.execute(
         text(
             "update comptes set secret_hash = crypt('code-samir', gen_salt('bf')) "
@@ -254,16 +299,27 @@ def test_mot_de_passe_partage_reste_valable_pour_les_autres_pseudos(client, db_s
     assert client.get("/").status_code == 200
 
 
-def test_le_role_n_est_jamais_affiche(client, db_session, monkeypatch):
+def test_le_role_n_est_jamais_affiche(client, db_session, monkeypatch, mode_heberge):
     # L'utilisateur ne doit pas pouvoir voir son statut : ni le pseudo, ni le rôle
     # ne remontent dans les pages, quel que soit le rôle résolu.
     from fakenews.models import Compte
 
-    monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
-    db_session.add(Compte(pseudo="chef", role="superadmin"))
+    mode_heberge("secret")
+    # Un superadmin DOIT avoir un code personnel : la contrainte
+    # ck_comptes_superadmin_a_un_code (migration 0002, correctif du finding H3)
+    # rejette désormais l'état qui rendait le mot de passe partagé suffisant.
+    db_session.add(
+        Compte(
+            pseudo="chef",
+            role="superadmin",
+            secret_hash=db_session.execute(
+                select(func.crypt("code-chef", func.gen_salt("bf")))
+            ).scalar_one(),
+        )
+    )
     article = _inserer_article_avec_score(db_session, "role-cache", 80.0)
     db_session.flush()
-    client.post("/login", data={"pseudo": "chef", "mot_de_passe": "secret"})
+    client.post("/login", data={"pseudo": "chef", "mot_de_passe": "code-chef"})
 
     for chemin in ("/", f"/articles/{article.id}"):
         texte = client.get(chemin).text
@@ -319,3 +375,50 @@ def test_pagination_limite_le_nombre_de_resultats_et_expose_page_suivante(client
     assert page_2.status_code == 200
     assert page_2.text.count('class="score"') == 5
     assert "page précédente" in page_2.text
+
+
+def test_pagination_ne_duplique_ni_n_omet_d_article_a_scores_ex_aequo(client, db_session):
+    """Les 55 articles ont le MÊME score : sans clé de tri secondaire, Postgres est
+    libre de renvoyer un ordre différent pour la requête de la page 1 et celle de
+    la page 2, ce qui duplique les uns et masque les autres.
+
+    Le test précédent se contentait de compter 50 puis 5 lignes — il passait tout
+    aussi bien avec un ORDER BY non déterministe (cf. audit, Mutation/Saboteur).
+    Celui-ci vérifie la propriété qui compte : l'union des pages est exactement
+    l'ensemble des articles, sans doublon."""
+    attendus = {str(_inserer_article_avec_score(db_session, f"exaequo-{i}", 80.0).id) for i in range(55)}
+
+    ids = re.findall(r'/articles/([0-9a-f-]{36})', client.get("/").text)
+    ids += re.findall(r'/articles/([0-9a-f-]{36})', client.get("/?page=2").text)
+
+    assert len(ids) == 55, "une page a renvoyé un nombre inattendu de lignes"
+    assert len(set(ids)) == 55, "un article apparaît sur les deux pages"
+    assert set(ids) == attendus, "un article a été omis par la pagination"
+
+
+def test_date_max_inclut_la_journee_indiquee(client, db_session):
+    """« Jusqu'au 5 septembre » doit inclure le 5 septembre. Comparer un timestamptz
+    à une `date` la coerce à minuit, ce qui supprimait toute la journée
+    (cf. audit, finding M2). Aucun test ne couvrait ce filtre avec des données."""
+    jour = date(2026, 3, 15)
+    article = _inserer_article_avec_score(db_session, "borne-haute", 80.0)
+    article.date_publication = datetime(2026, 3, 15, 18, 30, tzinfo=timezone.utc)
+    db_session.flush()
+
+    inclus = client.get(f"/?date_max={jour.isoformat()}")
+    assert "Titre borne-haute" in inclus.text
+
+    exclu = client.get(f"/?date_max={(jour - timedelta(days=1)).isoformat()}")
+    assert "Titre borne-haute" not in exclu.text
+
+
+def test_date_min_exclut_le_jour_precedent(client, db_session):
+    """Contrepartie de la borne haute : `date_min` reste bien une borne basse
+    inclusive, et un article antérieur est écarté (le test existant filtrait sur
+    2000-01-01, ce qu'aucune mutation de l'opérateur n'aurait fait échouer)."""
+    article = _inserer_article_avec_score(db_session, "borne-basse", 80.0)
+    article.date_publication = datetime(2026, 3, 15, 6, 0, tzinfo=timezone.utc)
+    db_session.flush()
+
+    assert "Titre borne-basse" in client.get("/?date_min=2026-03-15").text
+    assert "Titre borne-basse" not in client.get("/?date_min=2026-03-16").text

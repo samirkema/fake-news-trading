@@ -1,0 +1,27 @@
+# Ce fichier ne sert QUE de configuration pytest. Il déclarait aussi un
+# `build-system`, un `[project]` et un `packages.find` que rien n'installait — ni
+# la CI, ni le pipeline, ni Vercel, qui passent tous par `PYTHONPATH=src` ou un
+# `sys.path.insert`. Métadonnées décoratives, retirées (cf. audit phase 7, N13) :
+# le jour où un `pip install -e .` sera vraiment utile, on les rétablira avec un
+# usage réel derrière.
+
+# Remplace les mécanismes concurrents qui résolvaient `src/` pour les tests
+# (PYTHONPATH, sys.path.insert dans tests/conftest.py) — cf. audit, Layer
+# Enforcer. Le hack de api/index.py reste nécessaire : le runtime Vercel
+# n'installe pas le paquet.
+[tool.pytest.ini_options]
+# "src" : le paquet applicatif. "." : la racine, pour que `from tests._llm_factice
+# import ...` fonctionne quelle que soit L'INVOCATION.
+#
+# `python -m pytest` met le répertoire courant sur sys.path, `pytest` non. Les
+# vérifications locales passaient donc par la première forme pendant que la CI
+# utilisait la seconde : cinq modules de test échouaient à la collecte sur CI et
+# nulle part ailleurs (`ModuleNotFoundError: No module named 'tests'`). Déclarer
+# le chemin ici rend les deux invocations équivalentes.
+pythonpath = ["src", "."]
+testpaths = ["tests"]
+# --strict-markers : un marqueur inconnu devient une erreur, pas un skip silencieux.
+addopts = "--strict-markers -ra"
+markers = [
+    "reseau: le test a besoin d'un vrai accès réseau sortant (garde levée)",
+]

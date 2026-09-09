@@ -4,7 +4,12 @@ doc/userstories_évaluateur.md). Fournisseur : Claude (cf. fakenews.llm)."""
 
 import logging
 
-from fakenews.llm import appeler_structure, creer_client
+from fakenews.llm import (
+    CONSIGNE_CONTENU_NON_FIABLE,
+    appeler_structure,
+    creer_client,
+    encadrer_contenu_non_fiable,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +33,7 @@ SYSTEM = (
     "courte (1-2 phrases). Base-toi sur la plausibilité factuelle, la présence "
     "d'éléments vérifiables et le ton employé — pas sur tes propres connaissances "
     "générales du sujet, que tu ne peux pas vérifier ici."
+    + CONSIGNE_CONTENU_NON_FIABLE
 )
 
 
@@ -38,16 +44,41 @@ def evaluer_llm_bootstrap(titre: str, contenu: str, client=None) -> dict:
     doc/architecture.md, dégrader jamais bloquer)."""
     try:
         client = client or creer_client()
-        resultat = appeler_structure(client, SYSTEM, f"Titre : {titre}\n\nContenu :\n{contenu[:4000]}", SCHEMA)
+        prompt = "Article à évaluer :\n" + encadrer_contenu_non_fiable(
+            f"Titre : {titre}\n\nContenu :\n{contenu[:4000]}"
+        )
+        resultat = appeler_structure(client, SYSTEM, prompt, SCHEMA)
+        valeur = float(resultat["score_suspicion"])
+        if not 0.0 <= valeur <= 100.0:
+            # Le `minimum`/`maximum` du SCHEMA est une CONSIGNE au modèle, pas une
+            # validation : rien côté API ne rejette une valeur hors bornes. Elle
+            # traversait donc `calculer_score_composite` (qui ne borne pas non plus,
+            # à raison — ce n'est pas sa responsabilité) jusqu'à la contrainte SQL
+            # `ck_scores_score_final_range`, où l'IntegrityError faisait échouer le
+            # `commit()` final de tout le run (cf. audit phase 10, P2).
+            #
+            # On EXCLUT plutôt qu'on n'écrête : un modèle qui répond 150 n'a pas
+            # compris la consigne, et ramener sa réponse à 100 fabriquerait une
+            # suspicion maximale à partir d'une erreur. Signal exclu = on ne sait
+            # pas, ce qui est la vérité.
+            logger.warning("score LLM hors bornes (%s) — signal exclu.", valeur)
+            return {
+                "valeur": None,
+                "raison": f"score LLM hors bornes ({valeur}) — réponse inexploitable",
+                "preuve_id": "llm_bootstrap",
+            }
         return {
-            "valeur": float(resultat["score_suspicion"]),
+            "valeur": valeur,
             "raison": resultat["justification"],
             "preuve_id": "llm_bootstrap",
         }
     except Exception as exc:
+        # Seul le TYPE de l'exception est conservé : `raison` est persistée en base
+        # puis affichée dans le frontend, et un message brut peut transporter une
+        # URL contenant une clé d'API (cf. audit, finding H2).
         logger.warning("appel LLM bootstrap échoué pour un article : %s", exc)
         return {
             "valeur": None,
-            "raison": f"appel LLM indisponible ({exc})",
+            "raison": f"appel LLM indisponible ({type(exc).__name__})",
             "preuve_id": "llm_bootstrap",
         }

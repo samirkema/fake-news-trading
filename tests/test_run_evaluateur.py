@@ -2,7 +2,10 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from fakenews.evaluateur.run_evaluateur import evaluer_articles_non_scores
+from fakenews.evaluateur.run_evaluateur import (
+    _commiter_le_lot,
+    evaluer_articles_non_scores,
+)
 from fakenews.models import Article, Score
 
 
@@ -24,11 +27,13 @@ def _inserer_article(session, domaine_source, suffixe, auteur="Auteur Test", con
     return article
 
 
-# NB : la base de test locale contient aussi de vraies données collectées par le
-# scraper (278+ articles non scorés) — evaluer_articles_non_scores() les traite tous,
-# par conception (même logique que collecter_rss/collecter_reddit). Les assertions
-# ci-dessous vérifient donc le score de l'article de CE test spécifiquement, jamais
-# un compte total qui inclurait les vraies données.
+# NB : la base de test locale peut contenir de vraies données collectées par le
+# scraper. evaluer_articles_non_scores() en traite au plus PLAFOND_ARTICLES_PAR_DEFAUT
+# (300) par appel, les plus RÉCENTS d'abord — l'article inséré par chaque test est
+# daté de maintenant, il est donc toujours dans la fenêtre. Les assertions ci-dessous
+# vérifient le score de l'article de CE test spécifiquement, jamais un compte total.
+# (Ce commentaire affirmait « les traite tous, par conception », ce qui n'est plus
+# vrai depuis l'ajout du plafond — cf. audit phase 7, finding N8.)
 #
 # Aucune ANTHROPIC_API_KEY / GOOGLE_FACT_CHECK_API_KEY n'est configurée dans cet
 # environnement de test : US-07 (llm_bootstrap) est absent de sous_scores (client LLM
@@ -91,6 +96,45 @@ def test_article_style_douteux_augmente_le_score(db_session):
 
     score = db_session.execute(select(Score).where(Score.article_id == article.id)).scalar_one()
     assert score.sous_scores["style"]["valeur"] > 10.0
+
+
+def test_un_lot_refuse_par_la_base_ne_fait_pas_perdre_le_run(db_session):
+    """`_commiter_le_lot` absorbe l'échec d'écriture au lieu de le laisser remonter.
+
+    Avant, un seul `commit()` fermait le run : un article refusé par une contrainte
+    emportait les 299 autres, et avec eux les appels réseau et LLM déjà payés
+    (audit phase 10, P2). Ici on force un Score incohérent — `non_evaluable=False`
+    avec `score_final` nul viole `ck_scores_non_evaluable_coherent`."""
+    article = _inserer_article(db_session, "bbc.com", "lot-refuse")
+    db_session.add(
+        Score(
+            article_id=article.id,
+            sous_scores={},
+            poids={},
+            score_final=None,
+            non_evaluable=False,  # incohérent : la contrainte SQL le refusera
+        )
+    )
+
+    assert _commiter_le_lot(db_session, [article.id]) == 0
+    # La session reste utilisable après le rollback : c'est ce qui permet au run de
+    # continuer sur les lots suivants.
+    assert db_session.execute(select(Score).where(Score.article_id == article.id)).scalar_one_or_none() is None
+
+
+def test_le_run_persiste_lot_par_lot(db_session, monkeypatch):
+    """Trois articles, des lots de 1 : les trois scores sont écrits. Vérifie que le
+    découpage ne perd ni ne duplique rien sur le chemin nominal."""
+    monkeypatch.setattr("fakenews.evaluateur.run_evaluateur.TAILLE_LOT_COMMIT", 1)
+    articles = [_inserer_article(db_session, "bbc.com", f"lot-{n}") for n in range(3)]
+
+    evaluer_articles_non_scores(db_session)
+    db_session.flush()
+
+    for article in articles:
+        assert db_session.execute(
+            select(Score).where(Score.article_id == article.id)
+        ).scalar_one() is not None
 
 
 def test_article_deja_score_n_est_pas_re_evalue(db_session):

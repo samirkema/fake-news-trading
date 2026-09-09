@@ -1,7 +1,9 @@
 import logging
+import re
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+from html import unescape
 
 import feedparser
 from sqlalchemy.orm import Session
@@ -22,10 +24,36 @@ def _extraire_date_publication(entree) -> datetime | None:
     return datetime(*struct[:6], tzinfo=timezone.utc)
 
 
+# Un flux RSS livre son corps en HTML, pas en texte. Le stocker tel quel a un coût
+# en aval bien plus large qu'un affichage moche (cf. audit phase 10, P4) :
+#
+# - US-05 évaluateur cherche les citations avec `"[^"]{10,}"` : le premier
+#   `<a href="https://...">` venu satisfaisait le motif, si bien qu'un article sans
+#   la moindre citation échappait à la pénalité « aucune source nommée » ;
+# - le NER d'US-04 reçoit des balises au lieu de phrases ;
+# - la détection de langue compte « href », « img » et « src » comme des mots ;
+# - le LLM (US-07, US-02 contextualiseur) est facturé sur ce balisage.
+#
+# On nettoie donc à la COLLECTE, une seule fois, plutôt que dans chacun des quatre
+# consommateurs.
+_BLOCS_INERTES = re.compile(r"<(script|style)\b[^>]*>.*?</\1\s*>", re.S | re.I)
+_BALISES = re.compile(r"<[^>]+>")
+
+
+def nettoyer_html(brut: str) -> str:
+    """Texte lisible à partir d'un fragment HTML de flux RSS. Les blocs `script` et
+    `style` sont retirés AVEC leur contenu — sinon leur corps survivrait au retrait
+    des balises et se retrouverait dans le texte de l'article."""
+    sans_inertes = _BLOCS_INERTES.sub(" ", brut)
+    return re.sub(r"\s+", " ", unescape(_BALISES.sub(" ", sans_inertes))).strip()
+
+
 def _extraire_contenu(entree) -> str:
     if entree.get("content"):
-        return entree["content"][0].get("value", "")
-    return entree.get("summary") or entree.get("description") or ""
+        brut = entree["content"][0].get("value", "")
+    else:
+        brut = entree.get("summary") or entree.get("description") or ""
+    return nettoyer_html(brut)
 
 
 USER_AGENT = "Mozilla/5.0 (compatible; fakenews-scraper/0.1)"
@@ -40,8 +68,14 @@ def _telecharger(url: str) -> bytes | None:
     try:
         with urllib.request.urlopen(requete, timeout=TIMEOUT_SECONDES) as reponse:
             return reponse.read()
-    except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
-        logger.warning("téléchargement échoué: %s (%s)", url, exc)
+    except Exception as exc:
+        # `except Exception` volontaire : la liste fermée précédente
+        # (URLError, TimeoutError, ConnectionError) laissait passer
+        # http.client.HTTPException, ValueError sur une URL malformée ou
+        # UnicodeError sur un IDN — chacune faisant tomber le run RSS entier, en
+        # contradiction avec « toute intégration externe dégrade » de
+        # doc/V0/architecture.md (cf. audit, finding M11).
+        logger.warning("téléchargement échoué: %s (%s: %s)", url, type(exc).__name__, exc)
         return None
 
 
@@ -90,49 +124,90 @@ def collecter_rss(session: Session) -> dict:
     bilan = {}
     for source in RSS_SOURCES:
         source_effective, flux = _recuperer_flux(source)
+        # Bilan toujours clé sur la source CONFIGURÉE, jamais sur celle réellement
+        # utilisée : sinon « Reuters » disparaissait purement et simplement du
+        # rapport dès que son repli Guardian prenait le relais (finding L2).
+        nom_bilan = source["nom"]
         if flux is None:
-            bilan[source["nom"]] = {"statut": "indisponible", "ajoutes": 0, "mis_a_jour": 0, "ignores_sans_date": 0}
+            bilan[nom_bilan] = {
+                "statut": "indisponible",
+                "source_utilisee": source_effective["nom"],
+                "ajoutes": 0,
+                "mis_a_jour": 0,
+                "ignores_incomplets": 0,
+            }
             continue
 
-        compteurs = {"ajoutes": 0, "mis_a_jour": 0, "ignores_sans_date": 0}
+        # « ignores_incomplets » et non « ignores_sans_date » : le compteur agrège
+        # aussi les entrées sans titre et sans lien (finding L3).
+        compteurs = {"ajoutes": 0, "mis_a_jour": 0, "ignores_incomplets": 0, "ignores_erreur": 0}
         for entree in flux.entries:
             titre = entree.get("title")
             lien = entree.get("link")
             date_publication = _extraire_date_publication(entree)
             if not titre or not lien or date_publication is None:
-                compteurs["ignores_sans_date"] += 1
+                compteurs["ignores_incomplets"] += 1
                 logger.debug("entrée ignorée (titre/lien/date manquant): %r", entree.get("link"))
                 continue
 
-            contenu = _extraire_contenu(entree)
-            url_canonique = canonicaliser_url(lien)
-            resultat = enregistrer_ou_mettre_a_jour(
-                session,
-                {
-                    "titre": titre,
-                    "contenu": contenu,
-                    "auteur": entree.get("author"),
-                    "domaine_source": source_effective["domaine_source"],
-                    "date_publication": date_publication,
-                    "url": lien,
-                    "url_canonique": url_canonique,
-                    "hash_contenu": hacher_contenu(titre, contenu),
-                    "plateforme": "rss",
-                    "metadonnees": {"flux_nom": source_effective["nom"]},
-                },
-            )
+            # Protection au grain de l'ENTRÉE, comme reddit.py le fait au grain du
+            # post. L'asymétrie était réelle et sans justification : ici, une seule
+            # entrée malformée (URL que `urlsplit` refuse, écriture rejetée par la
+            # base) faisait remonter l'exception hors de `collecter_rss`, emportant
+            # les flux suivants ET la collecte Reddit qui suit dans `run_scraper`.
+            # C'est le contraire de « dégrader, jamais bloquer »
+            # (doc/V0/architecture.md), que le même fichier applique pourtant au
+            # grain du flux (cf. audit phase 10).
+            try:
+                # POINT DE SAUVEGARDE par entrée, pas `rollback()` : les deux
+                # isolent l'échec, mais un rollback annulerait aussi les entrées
+                # déjà traitées du même flux, qui ne sont commitées qu'en fin de
+                # boucle. `begin_nested` ne défait que l'entrée fautive et laisse la
+                # session utilisable pour les suivantes.
+                with session.begin_nested():
+                    contenu = _extraire_contenu(entree)
+                    url_canonique = canonicaliser_url(lien)
+                    resultat = enregistrer_ou_mettre_a_jour(
+                        session,
+                        {
+                            "titre": titre,
+                            "contenu": contenu,
+                            "auteur": entree.get("author"),
+                            "domaine_source": source_effective["domaine_source"],
+                            "date_publication": date_publication,
+                            "url": lien,
+                            "url_canonique": url_canonique,
+                            "hash_contenu": hacher_contenu(titre, contenu),
+                            "plateforme": "rss",
+                            "metadonnees": {"flux_nom": source_effective["nom"]},
+                        },
+                    )
+            except Exception as exc:
+                compteurs["ignores_erreur"] += 1
+                logger.warning("entrée ignorée (%s): %s (%s)", source_effective["nom"], lien, type(exc).__name__)
+                continue
+
             if resultat == "ajoute":
                 compteurs["ajoutes"] += 1
             elif resultat == "mis_a_jour":
                 compteurs["mis_a_jour"] += 1
 
         session.commit()
-        bilan[source_effective["nom"]] = {"statut": "ok", **compteurs}
-        if compteurs["ignores_sans_date"]:
+        bilan[nom_bilan] = {
+            "statut": "ok",
+            "source_utilisee": source_effective["nom"],
+            **compteurs,
+        }
+        if compteurs["ignores_incomplets"]:
             logger.warning(
                 "%s: %d entrée(s) ignorée(s) faute de titre/lien/date exploitable",
-                source_effective["nom"], compteurs["ignores_sans_date"],
+                source_effective["nom"], compteurs["ignores_incomplets"],
             )
-        logger.info("%s: %s", source_effective["nom"], bilan[source_effective["nom"]])
+        if compteurs["ignores_erreur"]:
+            logger.warning(
+                "%s: %d entrée(s) ignorée(s) sur échec de normalisation/persistance",
+                source_effective["nom"], compteurs["ignores_erreur"],
+            )
+        logger.info("%s: %s", nom_bilan, bilan[nom_bilan])
 
     return bilan

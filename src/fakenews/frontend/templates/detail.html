@@ -1,4 +1,7 @@
 {% extends "base.html" %}
+{# Titre distinct par page : toutes les pages partageaient le même, ce qui rend les
+   onglets et l'historique indistinguables (cf. audit, A11y/UX). #}
+{% block title %}{{ article.titre | truncate(70) }} — Fake News Détection{% endblock %}
 {% block content %}
 <p><a href="/">&larr; retour à la liste</a></p>
 <h2>{{ article.titre }}</h2>

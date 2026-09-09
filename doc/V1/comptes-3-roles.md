@@ -24,7 +24,7 @@ pseudo détermine le rôle. Le mot de passe :
 
 | Rôle | Qui | Résolution | Mot de passe |
 |------|-----|------------|--------------|
-| `superadmin` | `samirkema` | ligne dédiée dans `comptes` (créée par la migration) | code personnel (`comptes.secret_hash`) |
+| `superadmin` | `samirkema` | ligne dédiée dans `comptes` (créée par la migration) | code personnel (`comptes.secret_hash`), **imposé par contrainte** |
 | `contributeur` | pseudos ajoutés à la main dans `comptes` | ligne `role = 'contributeur'` | mot de passe partagé |
 | `spectateur` | tout le monde par défaut | **aucune ligne** dans `comptes` | mot de passe partagé |
 
@@ -40,6 +40,14 @@ Index unique insensible à la casse sur `lower(pseudo)`.
 
 `secret_hash` : `NULL` → ce pseudo se connecte avec le mot de passe partagé ;
 renseigné (hash bcrypt) → ce pseudo **doit** utiliser ce code personnel.
+
+**Contrainte `ck_comptes_superadmin_a_un_code`** : un `superadmin` ne peut pas
+avoir `secret_hash = NULL`. Sans elle, la propriété annoncée plus haut était
+fausse par défaut — la migration semait `samirkema` sans code, donc le mot de
+passe partagé suffisait à obtenir le rôle `superadmin`. La migration pose
+maintenant un code aléatoire inconnu de tous ; le vrai code doit être posé à la
+main (commande en fin de `0002_comptes.sql`). Tant qu'il ne l'est pas, le compte
+superadmin est **inaccessible**, ce qui est le bon défaut.
 
 Le frontend **lit** cette table (résolution du rôle, vérification du code via
 `crypt()` de Postgres) ; il ne l'écrit jamais — la règle « frontend strictement
@@ -60,17 +68,38 @@ update comptes
 
 - `fakenews.frontend.app.compte_courant` : dépendance FastAPI qui sert à la fois
   de garde d'accès et de résolveur de rôle.
-  - mode local (`FRONTEND_PASSWORD` non définie) → `superadmin` fictif (le mode
-    local est réservé au développeur, cf. US-04) ;
-  - cookie absent, mal formé ou signature invalide → redirection `/login` ;
+  - mode local **explicite** (`FAKENEWS_MODE=local`) → `superadmin` fictif (le
+    mode local est réservé au développeur, cf. US-04) ;
+  - hors mode local, `FRONTEND_PASSWORD` absente → **accès refusé** (le défaut est
+    fermé : une variable d'environnement oubliée sur Vercel ne doit pas ouvrir le
+    site, cf. US-04 « condition bloquante ») ;
+  - cookie absent, mal formé, **expiré** ou signature invalide → redirection `/login` ;
   - pseudo dans `comptes` → rôle associé ; sinon → `spectateur`.
+- `POST /login` est plafonné à 10 tentatives ratées par client sur 5 minutes.
+  Ralentisseur, pas barrière : sur Vercel chaque instance a son propre compteur.
+  Deux propriétés à ne pas casser en y touchant :
+  - le plafond ne s'applique **qu'aux échecs** — un mot de passe correct ouvre la
+    session même compteur plein, sinon dix mauvaises tentatives fermeraient le
+    site à tous ceux qui connaissent le bon ;
+  - `X-Forwarded-For` est **ignoré par défaut**, car c'est le client qui l'écrit.
+    Le lire sans condition rendait le plafond entièrement contournable (mesuré :
+    50 tentatives avec en-tête tournant, 0 refus). Il n'est pris en compte que si
+    `FAKENEWS_PROXYS_DE_CONFIANCE` déclare combien de proxys se trouvent devant
+    l'application. **Sur Vercel, cette valeur est 1** : la plateforme écrase
+    `X-Forwarded-For` au lieu d'y ajouter un maillon, précisément « to prevent IP
+    spoofing » ([doc Vercel](https://vercel.com/docs/headers/request-headers)), et
+    n'y laisse que l'IP publique réelle du visiteur.
 - `POST /login` : si le pseudo a un `secret_hash`, le mot de passe est vérifié
   contre ce hash (`crypt()` côté Postgres) ; sinon contre `FRONTEND_PASSWORD`.
-- Cookie de session : `pseudo:HMAC(clé, "fakenews-session:" + pseudo)` où
-  `clé = FRONTEND_PASSWORD + "\0" + (secret_hash | "")`. Conséquence : le cookie
+- Cookie de session : `pseudo:expiration:HMAC(clé, "fakenews-session:" + pseudo + ":" + expiration)`
+  où `clé = FRONTEND_PASSWORD + "\0" + (secret_hash | "")`. Conséquences : le cookie
   d'un compte à code personnel (samirkema) **ne peut pas** être fabriqué avec le
   seul mot de passe partagé — il faut aussi connaître `secret_hash`, qui ne vit
-  qu'en base.
+  qu'en base ; et l'expiration étant **dans la charge signée**, un cookie capté
+  cesse de valoir au bout de 30 jours et ne peut pas être rallongé. (Auparavant la
+  signature ne portait que le pseudo : le cookie était valide indéfiniment, et
+  seule une rotation du mot de passe partagé — qui déconnecte tout le monde —
+  pouvait le révoquer.)
 - Le rôle **n'est pas** dans le cookie — relu en base à chaque requête, donc un
   changement de rôle prend effet immédiatement. Changer `secret_hash` invalide
   les cookies existants de ce pseudo (re-connexion).
@@ -81,7 +110,8 @@ update comptes
 Le mot de passe partagé reste partagé : **n'importe qui le connaissant peut se
 connecter en tant que `spectateur` ou `contributeur` sous le pseudo de son
 choix.** Seul `superadmin` (samirkema) est une vraie frontière, grâce à son code
-personnel.
+personnel — et cette fois la base le garantit, au lieu de dépendre d'un `update`
+manuel que rien ne vérifiait.
 
 Tant qu'aucune capacité n'est réservée aux `contributeur`, ça n'a pas
 d'incidence. **Avant de donner à `contributeur` une action que `spectateur` ne

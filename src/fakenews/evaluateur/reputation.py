@@ -12,6 +12,12 @@ FIABLE = {
     "bbc.com",
     "lemonde.fr",
     "theguardian.com",
+    # Collecté sous ce domaine par sources_rss.py, et pourtant absent des deux
+    # listes : la seule agence de presse du corpus était en « réputation inconnue »
+    # (cf. audit phase 10). Sans effet observable aujourd'hui — le flux Reuters est
+    # mort depuis 2020 et c'est le repli Guardian qui sert — mais le jour où une
+    # source wire redevient disponible, elle doit être reconnue.
+    "reuters.com",
 }
 
 DOUTEUX = {

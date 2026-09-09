@@ -31,16 +31,39 @@ alter table comptes add column if not exists secret_hash text;
 create unique index if not exists uq_comptes_pseudo_lower on comptes (lower(pseudo));
 
 -- Superadmin unique du projet.
-insert into comptes (pseudo, role) values ('samirkema', 'superadmin')
+--
+-- IMPORTANT (correctif d'audit) : cette ligne était auparavant semée avec
+-- secret_hash NULL, ce qui rendait FAUX par défaut ce que doc/V1/comptes-3-roles.md
+-- présente comme la seule vraie frontière du modèle : avec un secret_hash NULL,
+-- quiconque connaît le mot de passe partagé se connecte en superadmin. La
+-- contrainte ck_comptes_superadmin_a_un_code ci-dessous rend cet état impossible.
+--
+-- Le code semé ici est un PLACEHOLDER inutilisable en l'état : gen_random_uuid()
+-- produit une valeur que personne ne connaît, donc personne ne peut se connecter
+-- en samirkema tant que le vrai code n'a pas été posé. Fail-closed, pas fail-open.
+insert into comptes (pseudo, role, secret_hash)
+values ('samirkema', 'superadmin', crypt(gen_random_uuid()::text, gen_salt('bf')))
 on conflict do nothing;
 
--- Code personnel de samirkema : le rendre DIFFÉRENT du mot de passe partagé.
--- pgcrypto est déjà activé par 0001. Remplacer 'CHANGE-MOI' par le vrai code,
--- puis exécuter (ré-exécutable pour changer le code) :
+-- Rattrapage des bases où la version précédente de cette migration a déjà semé
+-- samirkema avec secret_hash NULL (l'insert ci-dessus est alors un no-op) : on
+-- referme la brèche avant d'ajouter la contrainte, sinon celle-ci échouerait.
+update comptes
+   set secret_hash = crypt(gen_random_uuid()::text, gen_salt('bf'))
+ where role = 'superadmin' and secret_hash is null;
+
+-- Un superadmin DOIT avoir un code personnel : sinon le mot de passe partagé lui
+-- donne accès, et la frontière annoncée n'existe pas (cf. audit, finding H3).
+alter table comptes drop constraint if exists ck_comptes_superadmin_a_un_code;
+alter table comptes add constraint ck_comptes_superadmin_a_un_code
+    check (role <> 'superadmin' or secret_hash is not null);
+
+-- Poser le vrai code personnel de samirkema — pgcrypto est activé par 0001.
+-- Remplacer 'LE-VRAI-CODE' puis exécuter (ré-exécutable pour changer le code) :
 --
 --   update comptes
---      set secret_hash = crypt('CHANGE-MOI', gen_salt('bf'))
+--      set secret_hash = crypt('LE-VRAI-CODE', gen_salt('bf'))
 --    where lower(pseudo) = 'samirkema';
 --
--- Tant que secret_hash reste NULL, samirkema se connecte avec le mot de passe
--- partagé (comme les autres).
+-- Tant que ce n'est pas fait, le compte superadmin est inaccessible (le
+-- placeholder aléatoire n'est connu de personne) — c'est voulu.

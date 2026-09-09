@@ -25,22 +25,22 @@ def _requete(valeur_cookie=None):
     return SimpleNamespace(cookies=cookies)
 
 
-def test_pseudo_inconnu_est_spectateur(db_session, monkeypatch):
-    monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
+def test_pseudo_inconnu_est_spectateur(db_session, monkeypatch, mode_heberge):
+    mode_heberge("secret")
     compte = compte_courant(_requete(_valeur_cookie("inconnu", "secret")), db_session)
     assert compte == CompteCourant(pseudo="inconnu", role="spectateur")
 
 
-def test_pseudo_dans_comptes_prend_son_role(db_session, monkeypatch):
-    monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
+def test_pseudo_dans_comptes_prend_son_role(db_session, monkeypatch, mode_heberge):
+    mode_heberge("secret")
     db_session.add(Compte(pseudo="alice", role="contributeur"))
     db_session.flush()
     compte = compte_courant(_requete(_valeur_cookie("alice", "secret")), db_session)
     assert compte.role == "contributeur"
 
 
-def test_lookup_insensible_a_la_casse(db_session, monkeypatch):
-    monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
+def test_lookup_insensible_a_la_casse(db_session, monkeypatch, mode_heberge):
+    mode_heberge("secret")
     db_session.add(Compte(pseudo="Bob", role="contributeur"))
     db_session.flush()
     # le pseudo est normalisé en minuscules à la connexion -> "bob"
@@ -55,36 +55,36 @@ def test_migration_seed_samirkema_est_superadmin(db_session):
     assert role == "superadmin", "migration 0002_comptes.sql non appliquée à TEST_DATABASE_URL ?"
 
 
-def test_cookie_absent_refuse(db_session, monkeypatch):
-    monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
+def test_cookie_absent_refuse(db_session, monkeypatch, mode_heberge):
+    mode_heberge("secret")
     with pytest.raises(AccesRefuse):
         compte_courant(_requete(), db_session)
 
 
-def test_cookie_falsifie_refuse(db_session, monkeypatch):
-    monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
+def test_cookie_falsifie_refuse(db_session, monkeypatch, mode_heberge):
+    mode_heberge("secret")
     # signature valide pour "bob", réutilisée en prétendant être "samirkema"
     signature = _valeur_cookie("bob", "secret").split(":", 1)[1]
     with pytest.raises(AccesRefuse):
         compte_courant(_requete(f"samirkema:{signature}"), db_session)
 
 
-def test_mauvais_mot_de_passe_dans_la_signature_refuse(db_session, monkeypatch):
-    monkeypatch.setenv("FRONTEND_PASSWORD", "secret")
+def test_mauvais_mot_de_passe_dans_la_signature_refuse(db_session, monkeypatch, mode_heberge):
+    mode_heberge("secret")
     with pytest.raises(AccesRefuse):
         compte_courant(_requete(_valeur_cookie("alice", "autre-secret")), db_session)
 
 
 def test_mode_local_est_superadmin(db_session, monkeypatch):
-    monkeypatch.delenv("FRONTEND_PASSWORD", raising=False)
+    monkeypatch.setenv("FAKENEWS_MODE", "local")
     compte = compte_courant(_requete(), db_session)
     assert compte == CompteCourant(pseudo="local", role="superadmin")
 
 
-def test_cookie_superadmin_lie_au_secret_hash(db_session, monkeypatch):
+def test_cookie_superadmin_lie_au_secret_hash(db_session, monkeypatch, mode_heberge):
     """Avec un code personnel (secret_hash), le cookie de samirkema ne peut PAS
     être forgé avec le seul mot de passe partagé."""
-    monkeypatch.setenv("FRONTEND_PASSWORD", "partage")
+    mode_heberge("partage")
     db_session.execute(
         text(
             "update comptes set secret_hash = crypt('code-perso', gen_salt('bf')) "
