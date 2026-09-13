@@ -249,7 +249,10 @@ def test_logout_supprime_l_acces(client, monkeypatch, mode_heberge):
     client.post("/login", data={"pseudo": "alice", "mot_de_passe": "secret"})
     assert client.get("/").status_code == 200
 
-    client.post("/logout")
+    # `/logout` exige un jeton CSRF depuis qu'un lien de déconnexion existe : un
+    # site tiers ne doit pas pouvoir déconnecter un visiteur à son insu.
+    jeton = client.get("/").text.split('name="csrf" value="')[1].split('"')[0]
+    client.post("/logout", data={"csrf": jeton})
     reponse = client.get("/", follow_redirects=False)
     assert reponse.status_code == 303
     assert reponse.headers["location"] == "/login"

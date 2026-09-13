@@ -757,8 +757,25 @@ def connexion(
 
 
 @app.post("/logout")
-def deconnexion():
-    reponse = RedirectResponse(url="/login", status_code=303)
+def deconnexion(
+    csrf: str = Form(""),
+    compte: CompteCourant = Depends(compte_courant),
+):
+    """Ferme la session courante.
+
+    La route existait depuis l'origine, mais **aucun gabarit n'y renvoyait** : il
+    n'y avait donc, en pratique, aucun moyen de se déconnecter — et, la route
+    étant un POST, pas même en tapant l'URL. Vingt-trois audits ne l'ont pas vu :
+    ils cherchaient des défauts dans ce qui existe, jamais l'absence de ce qui
+    devrait exister. C'est un utilisateur qui a essayé de s'en servir.
+
+    Le jeton CSRF est exigé ici comme sur les six autres écritures. Déconnecter
+    quelqu'un de force est une nuisance, pas une brèche — mais une route
+    d'écriture non protégée au milieu de six qui le sont est une incohérence dont
+    personne ne se souviendra dans six mois."""
+    exige_csrf(csrf, compte)
+
+    reponse = _redirection("/login")
     # Attributs symétriques de la pose : un navigateur qui applique strictement les
     # règles de correspondance ignore un Set-Cookie de suppression dont les
     # attributs divergent (cf. audit, finding L12).

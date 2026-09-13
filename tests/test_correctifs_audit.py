@@ -491,7 +491,12 @@ def test_logout_supprime_le_cookie_avec_les_memes_attributs(client, monkeypatch,
     mode_heberge("secret")
     client.post("/login", data={"pseudo": "alice", "mot_de_passe": "secret"})
 
-    entete = client.post("/logout", follow_redirects=False).headers["set-cookie"].lower()
+    jeton = client.get("/").text.split('name="csrf" value="')[1].split('"')[0]
+    entete = (
+        client.post("/logout", data={"csrf": jeton}, follow_redirects=False)
+        .headers["set-cookie"]
+        .lower()
+    )
     assert "httponly" in entete
     assert "secure" in entete
     assert "samesite=lax" in entete

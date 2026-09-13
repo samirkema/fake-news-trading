@@ -689,3 +689,68 @@ def test_audit_phase17_le_jeton_csrf_depend_de_la_session(db_session, mode_heber
     assert reference != _calculer_csrf("bob", 1000, "secret", hash_b), "doit dépendre du code personnel"
     assert reference != _calculer_csrf("bob", 2000, "secret", hash_a), "doit dépendre de la session"
     assert reference != _calculer_csrf("alice", 1000, "secret", hash_a), "doit dépendre du pseudo"
+
+
+# ==============================================================================
+# Déconnexion — la route existait, l'interface n'y menait pas
+# ==============================================================================
+
+
+def test_le_lien_de_deconnexion_est_present_sur_les_pages(client, db_session, mode_heberge):
+    """La route `POST /logout` existait depuis l'origine, mais aucun gabarit n'y
+    renvoyait : il n'y avait aucun moyen de se déconnecter, et la route étant un
+    POST, pas même en tapant l'URL.
+
+    Vingt-trois audits ne l'ont pas vu — ils cherchaient des défauts dans ce qui
+    existe, jamais l'absence de ce qui devrait exister. Ce test garde la
+    PRÉSENCE d'une fonctionnalité, pas sa correction."""
+    mode_heberge("secret")
+    _connecter(client, db_session, "alice")
+
+    for chemin in ("/", "/proposer", "/compte"):
+        page = client.get(chemin).text
+        assert 'action="/logout"' in page, f"aucun moyen de se déconnecter depuis {chemin}"
+
+
+def test_la_deconnexion_ferme_reellement_la_session(client, db_session, mode_heberge):
+    mode_heberge("secret")
+    _connecter(client, db_session, "alice")
+    assert client.get("/", follow_redirects=False).status_code == 200
+
+    reponse = client.post("/logout", data={"csrf": _csrf(client)}, follow_redirects=False)
+
+    assert reponse.status_code == 303
+    assert reponse.headers["location"] == "/login"
+    assert client.get("/", follow_redirects=False).status_code == 303, "la session doit être close"
+
+
+def test_la_deconnexion_exige_un_jeton_csrf(client, db_session, mode_heberge):
+    """Un site tiers ne doit pas pouvoir déconnecter un visiteur à son insu.
+    Nuisance plutôt que brèche — mais une route d'écriture non protégée au milieu
+    de six qui le sont est une incohérence que personne ne retrouvera dans six
+    mois."""
+    mode_heberge("secret")
+    _connecter(client, db_session, "alice")
+
+    reponse = client.post("/logout", data={}, follow_redirects=False)
+
+    assert reponse.status_code == 403
+    assert client.get("/", follow_redirects=False).status_code == 200, "la session doit survivre"
+
+
+def test_toute_route_d_ecriture_exige_un_jeton_csrf():
+    """La règle plutôt que la ligne : chaque `@app.post` doit vérifier le jeton.
+    `/logout` y a échappé pendant toute la V3 parce que rien ne le vérifiait —
+    seule `/login` est exemptée, un CSRF n'y ayant aucun intérêt pour l'attaquant."""
+    import pathlib
+    import re
+
+    source = pathlib.Path(app_frontend.__file__).read_text(encoding="utf-8")
+    corps = re.split(r'@app\.post\("([^"]+)"\)', source)
+    # [avant, chemin1, corps1, chemin2, corps2, ...]
+    sans_garde = [
+        chemin
+        for chemin, suite in zip(corps[1::2], corps[2::2])
+        if "exige_csrf(" not in suite.split("@app.")[0] and chemin != "/login"
+    ]
+    assert sans_garde == [], f"routes POST sans vérification CSRF : {sans_garde}"
