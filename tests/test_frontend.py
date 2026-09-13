@@ -17,7 +17,14 @@ def client(db_session, monkeypatch):
     # fixture et bascule donc bien en mode hébergé.
     monkeypatch.setenv("FAKENEWS_MODE", "local")
     app.dependency_overrides[get_session] = lambda: db_session
-    yield TestClient(app)
+    """`https` : le cookie de session porte l'attribut `Secure`, qu'un client HTTP
+    correct refuse d'envoyer en clair. Sur `http://`, la session n'était donc
+    JAMAIS renvoyée : `client.get("/")` suivait la redirection vers /login et
+    rendait 200 — sur le FORMULAIRE DE CONNEXION. Toutes les assertions de la
+    forme « après connexion, la page répond 200 » passaient donc sans jamais
+    exercer un accès authentifié (constaté en corrigeant l'audit phase 18).
+    """
+    yield TestClient(app, base_url="https://testserver")
     app.dependency_overrides.clear()
 
 

@@ -51,6 +51,25 @@ capacité n'y est encore conditionnée — c'est la brique de base pour les axes
 ci-dessus (interaction utilisateur, modération, soumission). Détail et limite de
 sécurité connue : `doc/V1/comptes-3-roles.md`.
 
+## Scopé depuis — Crowdsourcing (V3, 2026-09-10)
+
+Trois des points listés ci-dessus ne sont plus « indicatifs » : ils sont scopés
+dans `doc/V3/` (user stories + plan d'implémentation), sans être implémentés.
+
+- axe 1, « soumission d'articles par les utilisateurs » → proposition d'un
+  article par tout compte connecté, file d'attente décidée par les contributeurs,
+  entrée dans le pipeline par le même chemin que la collecte automatique ;
+- axe 2, « interaction utilisateur » → commentaires sur l'analyse d'un article.
+  **La moitié « influer sur le score » n'est pas retenue** : un vote humain non
+  authentifié rendrait le score composite manipulable et lui retirerait son
+  explicabilité (cf. `doc/V3/userstories_crowdsourcing.md`, US-08) ;
+- axe 4, frontend → écrans d'accueil de ces fonctionnalités, plus un espace
+  compte et un écran de gestion des contributeurs.
+
+C'est aussi la version où la fondation « comptes à 3 rôles » ci-dessous cesse
+d'être décorative : le rôle `contributeur` reçoit sa première capacité, et donc
+son premier code personnel obligatoire.
+
 ## Statut
 
 Ces quatre axes ont été formulés par l'utilisateur le 2026-08-11 comme direction

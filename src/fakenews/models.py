@@ -15,7 +15,14 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-PLATEFORMES = ("rss", "reddit")
+# « proposition » : article entré par la file d'attente humaine plutôt que par la
+# collecte automatique (V3, cf. doc/V3/userstories_crowdsourcing.md US-04).
+PLATEFORMES = ("rss", "reddit", "proposition")
+
+STATUTS_PROPOSITION = ("en_attente", "acceptee", "refusee", "collectee", "echec_collecte")
+# Statuts pour lesquels une proposition occupe la place de son URL : on n'en
+# accepte pas une seconde tant que celle-ci n'est pas retombée (US-01).
+STATUTS_VIVANTS = ("en_attente", "acceptee")
 
 
 def _liste_sql(valeurs) -> str:
@@ -103,11 +110,20 @@ class Score(Base):
 
 
 class Compte(Base):
-    """Lue par le frontend (jamais écrite par lui — lecture seule stricte, cf.
-    doc/V0/architecture.md) pour résoudre le rôle d'un pseudo connecté. Fondation
+    """Résout le rôle d'un pseudo connecté. Fondation
     V1 de l'authentification à 3 rôles (spectateur / contributeur / superadmin,
     cf. doc/V1/comptes-3-roles.md). Un pseudo absent de la table => rôle
-    « spectateur ». L'index unique insensible à la casse sur `lower(pseudo)` est
+    « spectateur ».
+
+    **MàJ V3 :** le frontend ÉCRIT désormais cette table — enregistrement du
+    pseudo à la première connexion (US-07), changement de code par son titulaire
+    (US-05), promotion et rétrogradation par le superadmin (US-06). La règle
+    « frontend en lecture seule stricte » est remplacée par une frontière plus
+    précise : il écrit des intentions humaines, jamais un verdict
+    (`articles`, `scores`, `mise_en_contexte` lui restent interdites en écriture —
+    cf. doc/V0/architecture.md, décision V3).
+
+    L'index unique insensible à la casse sur `lower(pseudo)` est
     porté par la migration 0002 (non déclaré ici : SQLAlchemy ne gère pas
     proprement un index fonctionnel via `__table_args__` sur cette version)."""
 
@@ -127,6 +143,92 @@ class Compte(Base):
 
     __table_args__ = (
         CheckConstraint(f"role in {_liste_sql(ROLES)}", name="ck_comptes_role"),
+    )
+
+
+class Proposition(Base):
+    """Article proposé par un compte connecté, en attente de décision d'un
+    contributeur (V3, cf. doc/V3/userstories_crowdsourcing.md US-01 à US-04).
+
+    Seule table, avec `commentaires` et `comptes`, que le frontend écrit. Elle
+    porte une INTENTION humaine ; l'article, lui, n'est créé que par le pipeline,
+    au moment de la collecte (`article_id` renseigné alors). C'est la frontière
+    qui remplace « frontend en lecture seule stricte » (doc/V0/architecture.md,
+    décision V3).
+
+    `propose_par` et `decide_par` stockent le pseudo, pas une clé étrangère vers
+    `comptes` : un spectateur n'a pas nécessairement de ligne au moment où il
+    propose, et la trace doit survivre à la suppression d'un compte."""
+
+    __tablename__ = "propositions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    url_canonique: Mapped[str] = mapped_column(Text, nullable=False)
+    note: Mapped[str | None] = mapped_column(Text)
+    propose_par: Mapped[str] = mapped_column(Text, nullable=False)
+    date_proposition: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    statut: Mapped[str] = mapped_column(Text, nullable=False, default="en_attente")
+    decide_par: Mapped[str | None] = mapped_column(Text)
+    date_decision: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    motif: Mapped[str | None] = mapped_column(Text)
+    article_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("articles.id", ondelete="SET NULL")
+    )
+
+    # Miroir des contraintes de `0005_propositions.sql`. `verifier_schema` ne
+    # contrôle que les colonnes, donc leur absence en base ne se signalerait qu'à
+    # la première écriture — les déclarer ici ne referme pas cet écart, mais rend
+    # visible en lecture ce que la base garantit (audit phase 17, F17-08).
+    # L'index unique partiel sur les statuts vivants n'est PAS déclarable
+    # proprement ici : il vit dans la migration seule, comme
+    # `uq_comptes_pseudo_lower`.
+    __table_args__ = (
+        CheckConstraint(f"statut in {_liste_sql(STATUTS_PROPOSITION)}", name="ck_propositions_statut"),
+        CheckConstraint(
+            "statut <> 'refusee' or (motif is not null and length(trim(motif)) > 0)",
+            name="ck_propositions_refus_motive",
+        ),
+        CheckConstraint(
+            "statut = 'en_attente' or (decide_par is not null and date_decision is not null)",
+            name="ck_propositions_decision_tracee",
+        ),
+    )
+
+
+class Commentaire(Base):
+    """Parole d'un visiteur sur l'analyse d'un article (V3, US-08 crowdsourcing).
+
+    Écrite par le frontend, comme `propositions` et `comptes`. Elle ne participe
+    à AUCUN calcul : le score composite reste une moyenne pondérée de signaux
+    traçables (US-08 évaluateur), et y injecter un retour humain non authentifié
+    le rendrait manipulable par quiconque connaît le mot de passe partagé.
+
+    `pseudo` et `retire_par` stockent le pseudo, pas une clé étrangère vers
+    `comptes` : la trace doit survivre à la suppression d'un compte."""
+
+    __tablename__ = "commentaires"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    article_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("articles.id", ondelete="CASCADE"), nullable=False
+    )
+    pseudo: Mapped[str] = mapped_column(Text, nullable=False)
+    texte: Mapped[str] = mapped_column(Text, nullable=False)
+    date_creation: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Retrait = masquage. `retire_le is null` est la condition d'affichage public ;
+    # le superadmin, lui, continue de voir le contenu retiré.
+    retire_le: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    retire_par: Mapped[str | None] = mapped_column(Text)
+
+    # Miroir des contraintes de `0007_commentaires.sql` (cf. `Proposition`).
+    __table_args__ = (
+        CheckConstraint("length(trim(texte)) > 0", name="ck_commentaires_texte_non_vide"),
+        CheckConstraint(
+            "(retire_le is null and retire_par is null) "
+            "or (retire_le is not null and retire_par is not null)",
+            name="ck_commentaires_retrait_trace",
+        ),
     )
 
 

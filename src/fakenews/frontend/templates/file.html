@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}File d'attente — Fake News Détection{% endblock %}
+{% block content %}
+<h2>File d'attente des propositions</h2>
+<p class="aide">
+  Accepter un article autorise son entrée dans la base : il sera collecté puis
+  analysé au prochain run du pipeline, pas immédiatement.
+</p>
+
+{% if erreur %}<p class="erreur" role="alert">{{ erreur }}</p>{% endif %}
+
+<h3>En attente de décision ({{ en_attente | length }})</h3>
+{% if en_attente %}
+<table>
+  <thead><tr><th>Article</th><th>Proposé par</th><th>Note</th><th>Décision</th></tr></thead>
+  <tbody>
+    {% for p in en_attente %}
+    <tr>
+      <td><a href="{{ p.url }}" target="_blank" rel="noopener noreferrer">{{ p.url | truncate(60) }}</a></td>
+      <td>{{ p.propose_par }}<br><small>{{ p.date_proposition.strftime("%Y-%m-%d") }}</small></td>
+      <td>{{ p.note or "—" }}</td>
+      <td>
+        <form method="post" action="/file/{{ p.id }}/accepter" class="enligne">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button type="submit">Accepter</button>
+        </form>
+        <form method="post" action="/file/{{ p.id }}/refuser" class="enligne">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <label for="motif-{{ p.id }}" class="visuellement-cache">Motif du refus</label>
+          <input type="text" id="motif-{{ p.id }}" name="motif" required
+                 maxlength="500" placeholder="Motif du refus">
+          <button type="submit">Refuser</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>Aucune proposition en attente.</p>
+{% endif %}
+
+<h3>Décisions passées</h3>
+{% if decidees %}
+<table>
+  <thead><tr><th>Article</th><th>Proposé par</th><th>Décidé par</th><th>Issue</th></tr></thead>
+  <tbody>
+    {% for p in decidees %}
+    <tr>
+      <td><a href="{{ p.url }}" target="_blank" rel="noopener noreferrer">{{ p.url | truncate(50) }}</a></td>
+      <td>{{ p.propose_par }}</td>
+      <td>{{ p.decide_par }}<br><small>{{ p.date_decision.strftime("%Y-%m-%d") if p.date_decision else "" }}</small></td>
+      <td>
+        {% if p.statut == "acceptee" %}acceptée — en attente d'analyse
+        {% elif p.statut == "refusee" %}refusée — {{ p.motif }}
+        {% elif p.statut == "collectee" %}<a href="/articles/{{ p.article_id }}">analysée</a>
+        {% else %}collecte impossible{% if p.motif %} — {{ p.motif }}{% endif %}
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>Aucune décision pour l'instant.</p>
+{% endif %}
+{% endblock %}

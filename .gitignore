@@ -11,3 +11,7 @@ __pycache__/
 # `.env*` couvre aussi .env.example / .env.template : sans cette exception, un
 # nouveau gabarit d'environnement serait silencieusement ignoré (audit, finding L9).
 !.env.example
+
+# Graphe de connaissance régénéré par `graphify update .` — artefact, pas source
+# (audit phase 14, F25 : il n'était ni ignoré ni commité).
+graphify-out/

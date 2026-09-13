@@ -8,12 +8,8 @@ import logging
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from fakenews.config import entier_depuis_env, seuil_suspicion
+from fakenews.config import PLAFOND_APPELS_PAR_DEFAUT, entier_depuis_env, seuil_suspicion
 from fakenews.contextualiseur.avertissement import AVERTISSEMENT
-from fakenews.contextualiseur.declenchement import (
-    PLAFOND_APPELS_PAR_DEFAUT,
-    articles_a_traiter,
-)
 from fakenews.contextualiseur.generation import generer_mise_en_contexte
 from fakenews.contextualiseur.persistance import enregistrer_mise_en_contexte
 from fakenews.db import SessionLocal
@@ -57,11 +53,10 @@ def selectionner_articles_a_traiter(session: Session) -> list[dict]:
         .limit(plafond)
     ).all()
 
-    candidats = [
+    selection = [
         {"article_id": l.article_id, "score_final": float(l.score_final), "non_evaluable": l.non_evaluable}
         for l in lignes
     ]
-    selection = articles_a_traiter(candidats, seuil=seuil, plafond=plafond)
 
     # US-01, 5e critère : « chaque run journalise le nombre d'articles traités vs. le
     # nombre total scoré par l'évaluateur ». Ce ratio n'était produit nulle part : le
@@ -78,7 +73,8 @@ def selectionner_articles_a_traiter(session: Session) -> list[dict]:
 def traiter_selection(session: Session, selection: list[dict], client=None) -> int:
     """Génère et persiste la mise en contexte de chaque article sélectionné. Un
     échec de génération pour un article n'interrompt pas les suivants (cf.
-    doc/architecture.md, dégrader jamais bloquer)."""
+    doc/architecture.md, dégrader jamais bloquer). Chaque mise en contexte est
+    commitée individuellement pour ne pas perdre les générations payées."""
     nb_generes = 0
     for item in selection:
         # Récupération DANS le try : elle en était sortie, si bien qu'un article
@@ -100,19 +96,26 @@ def traiter_selection(session: Session, selection: list[dict], client=None) -> i
             )
             continue
 
-        enregistrer_mise_en_contexte(
-            session,
-            article_id=article.id,
-            explication=resultat["explication"],
-            faits_traces=resultat["faits_traces"],
-            deductions_llm=resultat["deductions_llm"],
-            sources_utilisees=resultat["sources_utilisees"],
-            niveau_confiance=resultat.get("niveau_confiance"),
-            avertissement=AVERTISSEMENT,
-        )
-        nb_generes += 1
+        try:
+            enregistrer_mise_en_contexte(
+                session,
+                article_id=article.id,
+                explication=resultat["explication"],
+                faits_traces=resultat["faits_traces"],
+                deductions_llm=resultat["deductions_llm"],
+                sources_utilisees=resultat["sources_utilisees"],
+                niveau_confiance=resultat.get("niveau_confiance"),
+                avertissement=AVERTISSEMENT,
+            )
+            session.commit()
+            nb_generes += 1
+        except Exception as exc:
+            session.rollback()
+            logger.error(
+                "Échec d'enregistrement de la mise en contexte pour l'article %s : %s",
+                item["article_id"], exc,
+            )
 
-    session.commit()
     return nb_generes
 
 

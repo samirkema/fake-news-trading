@@ -67,7 +67,8 @@ VERDICTS_AMBIGUS = {
     # (` confirmed ` est dans ` not confirmed `) et basculeraient donc vers VRAI si
     # rien ne les interceptait plus tôt. Neutre est la direction d'erreur sûre.
     "unconfirmed", "unverified", "not confirmed", "not verified",
-    "non confirmé", "non vérifié",
+    "non confirmé", "non vérifié", "pas confirmé", "pas vérifié",
+    "n'est pas confirmé", "n'est pas vérifié",
 }
 MOTS_FAUX = {
     "false", "faux", "pants on fire", "misleading", "trompeur", "incorrect",
@@ -76,6 +77,11 @@ MOTS_FAUX = {
     "no evidence", "altered", "manipulated", "scam", "hoax", "miscaptioned",
     "misattributed", "mislabeled", "erroné", "infondé", "mensonger",
     "aucune preuve", "détourné", "truqué",
+    # Formes niées françaises : « vrai », « avéré », « exact » y sont présents
+    # littéralement et basculeraient vers VRAI sans ces formes explicites (audit phase 11).
+    "pas vrai", "pas exact", "pas avéré", "pas correct", "non avéré",
+    "ce n'est pas vrai", "n'est pas vrai", "ceci n'est pas exact",
+    "n'est pas exact", "n'est pas avéré", "pas conforme",
 }
 MOTS_VRAI = {
     "true", "vrai", "correct", "accurate", "mostly true", "largement vrai",
@@ -89,6 +95,36 @@ _NIVEAUX = (
     (frozenset(_borner(v) for v in MOTS_FAUX), VALEUR_FAUX),
     (frozenset(_borner(v) for v in MOTS_VRAI), VALEUR_VRAI),
 )
+
+_MOTS_VIDES_CLAIM = {
+    "le", "la", "les", "des", "une", "un", "est", "et", "de", "du", "que", "qui", "pour", "dans",
+    "the", "of", "and", "to", "in", "is", "that", "it", "for", "with", "as", "was", "are", "this",
+    "sur", "avec", "par", "aux", "on", "at", "by", "from",
+}
+
+
+def _mots_significatifs(texte: str) -> set[str]:
+    # Tronqués à 5 caractères : le français fléchit là où l'anglais ne bouge pas
+    # (« vaccin »/« vaccins », « modifie »/« modifient »), et la comparaison
+    # littérale rejetait donc des claims françaises pertinentes (audit phase 13).
+    mots = re.findall(r"[a-z0-9]{3,}", _aplatir(texte))
+    return {m[:5] for m in mots if m not in _MOTS_VIDES_CLAIM}
+
+
+def _claim_est_pertinente(titre: str, texte_claim: str) -> bool:
+    """Vérifie qu'il existe un recouvrement lexical minimal entre le titre de l'article
+    et la claim retournée par Google Fact Check Tools. Sans ce contrôle, une recherche
+    floue de l'API associe un verdict à un article sans rapport (US-03, audit phase 12)."""
+    if not texte_claim:
+        # Sans texte de claim, la pertinence est invérifiable : on n'utilise pas un
+        # verdict qu'on ne peut pas rattacher à l'article (neutre = erreur sûre).
+        return False
+    mots_titre = _mots_significatifs(titre)
+    mots_claim = _mots_significatifs(texte_claim)
+    if not mots_titre or not mots_claim:
+        return False
+    intersection = mots_titre & mots_claim
+    return len(intersection) >= 2 or (len(intersection) / len(mots_titre) >= 0.3)
 
 
 def _interpreter_verdict(note_textuelle: str) -> float | None:
@@ -118,6 +154,13 @@ def evaluer_fact_checking(titre: str, cle_api: str | None = None, client: httpx.
         reponse.raise_for_status()
         claims = reponse.json().get("claims") or []
         for claim in claims:
+            # Pas de `if texte_claim and ...` : une claim SANS texte faisait sauter le
+            # contrôle au lieu de le déclencher, alors que `_claim_est_pertinente`
+            # traite déjà ce cas comme non pertinent — le site d'appel disait donc le
+            # contraire de la fonction qu'il appelait, et un verdict « False » portant
+            # sur une tout autre affaire était appliqué à 90 (cf. audit phase 14, F1).
+            if not _claim_est_pertinente(titre, claim.get("text") or ""):
+                continue
             for review in claim.get("claimReview") or []:
                 note = review.get("textualRating")
                 if not note:

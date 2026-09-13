@@ -1,13 +1,10 @@
-"""Un test par critère d'acceptation, nommé d'après lui.
+"""Vérification ciblée des critères d'acceptation critiques des user stories
+(seuils configurables, plafonds, authentification fail-closed, documentation).
 
-Raison d'être (cf. audit phase 10) : `test_correctifs_audit.py` verrouille les
-régressions des correctifs DÉJÀ passés — il ne dit rien de la conformité initiale.
-C'est par ce trou que quatre audits successifs ont déclaré la couche métier
-conforme sans la re-dériver des user stories : un critère non tenu ne produisait
-aucun signal, seulement l'absence d'un test que personne n'avait écrit.
-
-Un critère violé doit être un test ROUGE, pas un paragraphe dans un rapport.
-"""
+Raison d'être (cf. audit phase 10, révisé phase 12) : `test_correctifs_audit.py`
+verrouille les régressions des correctifs passés ; ce fichier garde les invariants
+fondamentaux et s'assure que les contrats de configuration et d'exploitation
+restent respectés."""
 
 import os
 from pathlib import Path
@@ -22,7 +19,7 @@ from fakenews.config import (
     entier_depuis_env,
     seuil_suspicion,
 )
-from fakenews.contextualiseur.declenchement import PLAFOND_APPELS_PAR_DEFAUT
+from fakenews.config import PLAFOND_APPELS_PAR_DEFAUT
 from fakenews.contextualiseur.run_contextualiseur import NOM_ENV_PLAFOND
 from fakenews.frontend.app import app
 
@@ -176,7 +173,24 @@ def test_les_variables_d_environnement_lues_sont_documentees():
     l'exploitant : il ne peut pas la régler puisqu'il n'en connaît pas l'existence."""
     exemple = Path(__file__).resolve().parent.parent / ".env.example"
     contenu = exemple.read_text(encoding="utf-8")
-    for variable in (NOM_ENV_SEUIL, NOM_ENV_PLAFOND, "LLM_PLAFOND_BACKFILL"):
+    variables = (
+        NOM_ENV_SEUIL,
+        NOM_ENV_PLAFOND,
+        "LLM_PLAFOND_BACKFILL",
+        "LLM_PLAFOND_EVALUATEUR",
+        "EVALUATEUR_PLAFOND_ARTICLES",
+        "LLM_MODELE",
+        "SEC_EDGAR_USER_AGENT",
+        "FRONTEND_PASSWORD",
+        "FAKENEWS_MODE",
+        "FAKENEWS_PROXYS_DE_CONFIANCE",
+        "ANTHROPIC_API_KEY",
+        "GOOGLE_FACT_CHECK_API_KEY",
+        "REDDIT_CLIENT_ID",
+        "REDDIT_CLIENT_SECRET",
+        "DATABASE_URL",
+    )
+    for variable in variables:
         assert variable in contenu, f"{variable} lue par le code, absente de .env.example"
 
 

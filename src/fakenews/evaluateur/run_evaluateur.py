@@ -33,8 +33,8 @@ PLAFOND_APPELS_LLM_PAR_DEFAUT = 50
 # Plafond d'articles traités par run. Chaque article déclenche 2 à 3 appels réseau
 # synchrones à 10 s de timeout : sans borne, un backlog de plusieurs centaines
 # d'articles fait un run de plusieurs heures, exposé au timeout GitHub Actions
-# (cf. audit, finding M9). Le reliquat est traité au run suivant — les articles
-# non scorés restent sélectionnés tant qu'ils n'ont pas de Score.
+# (cf. audit, finding M9). Le reliquat est traité au run suivant — ce qui n'est
+# vrai que depuis le correctif de F3 ci-dessous.
 PLAFOND_ARTICLES_PAR_DEFAUT = 300
 
 # Un seul `commit()` en fin de run rendait l'écriture tout-ou-rien : un article
@@ -85,17 +85,35 @@ def evaluer_articles_non_scores(
             select(Article)
             .outerjoin(Score, Score.article_id == Article.id)
             .where(Score.id.is_(None))
-            # Les plus récents d'abord : un backlog qui déborde doit livrer
-            # l'actualité de la semaine, pas des articles périmés.
-            .order_by(Article.date_publication.desc(), Article.id)
+            # PREMIER COLLECTÉ, PREMIER SERVI. Le tri précédent prenait les plus
+            # récents d'abord, au motif qu'un backlog qui déborde doit livrer
+            # l'actualité de la semaine — mais il ne « reportait » rien du tout :
+            # au run suivant, les nouveautés collectées entre-temps repassaient
+            # devant, et le reliquat était affamé DÉFINITIVEMENT. Reproduit :
+            # un article dépassé une fois n'était jamais noté, donc jamais visible
+            # dans le frontend, qui joint `Score` en jointure interne
+            # (cf. audit phase 14, F3).
+            #
+            # `date_collecte` et non `date_publication` : c'est l'ordre d'ARRIVÉE
+            # dans le système qui doit être équitable. Un article ancien proposé
+            # aujourd'hui par un contributeur n'a pas à passer après tout le
+            # corpus de la semaine.
+            .order_by(Article.date_collecte, Article.id)
             .limit(plafond_articles)
         )
         .scalars()
         .all()
     )
     if restants > len(articles):
+        # Un reliquat ponctuel se résorbe au run suivant. Un reliquat qui grossit
+        # d'un run à l'autre est un déficit STRUCTUREL — l'ingestion dépasse la
+        # capacité — et aucun ordre de tri ne le règle : il faut relever
+        # EVALUATEUR_PLAFOND_ARTICLES ou réduire la collecte.
         logger.warning(
-            "%d article(s) non scoré(s) pour un plafond de %d — %d reporté(s) au prochain run.",
+            "%d article(s) non scoré(s) pour un plafond de %d — %d repris au prochain "
+            "run (les plus anciennement collectés d'abord). Si ce nombre grandit d'un "
+            "run à l'autre, l'ingestion dépasse la capacité : relever le plafond ou "
+            "réduire la collecte.",
             restants, plafond_articles, restants - len(articles),
         )
 

@@ -34,6 +34,25 @@ logger = logging.getLogger(__name__)
 SEUIL_SUSPICION_PAR_DEFAUT = 60.0
 NOM_ENV_SEUIL = "CONTEXTUALISEUR_SEUIL"
 
+# Appels LLM du contextualiseur par run. Vivait dans `contextualiseur.declenchement`,
+# module supprimé une fois son seul comportement (`articles_a_traiter`) remplacé par
+# la requête SQL de `selectionner_articles_a_traiter` (audit phase 13).
+PLAFOND_APPELS_PAR_DEFAUT = 20
+
+# Propositions d'articles acceptées d'un même compte sur 24 h glissantes (V3,
+# US-01 crowdsourcing). Sans plafond, un seul compte remplit la file d'attente et
+# rend impraticable le travail des contributeurs. Compté en base plutôt qu'en
+# mémoire : sur Vercel chaque instance a la sienne, un compteur en mémoire se
+# contournerait en insistant jusqu'à tomber sur une autre instance.
+PROPOSITIONS_PAR_JOUR_PAR_DEFAUT = 10
+NOM_ENV_PROPOSITIONS_MAX = "PROPOSITIONS_MAX_PAR_JOUR"
+
+# Commentaires d'un même compte sur 24 h glissantes (V3, US-08 crowdsourcing).
+# Même raison et même comptage en base que les propositions : un compteur en
+# mémoire se contournerait en insistant jusqu'à tomber sur une autre instance.
+COMMENTAIRES_PAR_JOUR_PAR_DEFAUT = 20
+NOM_ENV_COMMENTAIRES_MAX = "COMMENTAIRES_MAX_PAR_JOUR"
+
 
 def _brut(nom: str) -> str | None:
     valeur = os.environ.get(nom)

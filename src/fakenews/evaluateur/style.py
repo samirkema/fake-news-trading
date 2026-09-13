@@ -37,8 +37,8 @@ _MOTS_OUTILS = {
     "fr": {
         "le", "la", "les", "des", "une", "un", "est", "et", "de", "du", "que",
         "qui", "pour", "dans", "sur", "avec", "par", "plus", "ne", "pas", "aux",
-        "ce", "cette", "ses", "leur", "leurs", "vous", "nous", "ils", "elles",
-        "mais", "donc", "sont", "apres", "après", "selon", "contre", "sans",
+        "ce", "cette", "ces", "cet", "ses", "leur", "leurs", "vous", "nous", "ils", "elles",
+        "mais", "donc", "sont", "apres", "après", "selon", "contre", "sans", "deux", "trois",
     },
     "en": {
         "the", "of", "and", "to", "in", "is", "that", "it", "for", "with", "as",
@@ -48,6 +48,8 @@ _MOTS_OUTILS = {
 }
 
 _ACCENTS_FR = re.compile(r"[àâéèêëïîôùûç]")
+_ACCENTS_STRICTS_FR = re.compile(r"[àâèêëïîôùûç]")
+_ELISION_FR = re.compile(r"\b[cldjmnst]['’]|\bqu['’]", re.I)
 
 # Liens de toute forme (markdown Reddit, URL nue, reliquat d'attribut HTML).
 _URL = re.compile(r"https?://\S+|www\.\S+")
@@ -71,14 +73,30 @@ def _detecter_langue(texte: str) -> str:
 
     On compare désormais deux poids, sur les OCCURRENCES. En cas d'égalité — un
     texte très court peut n'avoir aucun mot-outil — les caractères accentués
-    tranchent : ils sont un marqueur français fort et quasi absents de l'anglais."""
+    tranchent : ils sont un marqueur français fort et quasi absents de l'anglais,
+    en veillant à ne pas faire basculer un titre anglais à cause d'un nom propre
+    isolé portant un accent aigu (audit phase 11)."""
     mots = re.findall(r"[a-zàâäéèêëïîôöùûüç]+", texte.lower())
     poids = {
         langue: sum(1 for mot in mots if mot in liste)
         for langue, liste in _MOTS_OUTILS.items()
     }
     if poids["fr"] == poids["en"]:
-        return "fr" if _ACCENTS_FR.search(texte.lower()) else "en"
+        if _ELISION_FR.search(texte):
+            return "fr"
+        if _ACCENTS_STRICTS_FR.search(texte.lower()):
+            return "fr"
+        nb_accents_distincts = len(set(_ACCENTS_FR.findall(texte.lower())))
+        if nb_accents_distincts >= 2:
+            return "fr"
+        if poids["fr"] > 0 and nb_accents_distincts >= 1:
+            return "fr"
+        # Si un mot entièrement en minuscules dans le texte original porte un accent
+        # (ex: « véhicules », « démissionnent » vs noms propres « Beyoncé », « Nestlé »)
+        mots_originaux = re.findall(r"\b[a-zàâäéèêëïîôöùûüç]+\b", texte)
+        if any(_ACCENTS_FR.search(m) for m in mots_originaux):
+            return "fr"
+        return "en"
     return max(poids, key=poids.get)
 
 

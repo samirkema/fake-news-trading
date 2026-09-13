@@ -96,15 +96,22 @@ def backfiller_llm_bootstrap(session: Session, client=None, plafond: int | None 
             score.detail_calcul = recalcul["detail"]
             score.score_final = recalcul["score_final"]
             score.non_evaluable = recalcul["non_evaluable"]
-            nb_traites += 1
-            # Un appel raté produit `valeur: None` : le score est bien réécrit, mais
-            # le signal reste exclu. Les compter ensemble faisait annoncer « N score(s)
-            # mis à jour avec un signal VALIDE » après N échecs d'affilée — un rapport
-            # qui décrit le contraire de ce qui s'est passé (cf. audit phase 10).
-            if resultat.get("valeur") is not None:
-                nb_valides += 1
+            try:
+                session.commit()
+                nb_traites += 1
+                # Un appel raté produit `valeur: None` : le score est bien réécrit, mais
+                # le signal reste exclu. Les compter ensemble faisait annoncer « N score(s)
+                # mis à jour avec un signal VALIDE » après N échecs d'affilée — un rapport
+                # qui décrit le contraire de ce qui s'est passé (cf. audit phase 10).
+                if resultat.get("valeur") is not None:
+                    nb_valides += 1
+            except Exception as exc:
+                session.rollback()
+                logger.error(
+                    "Échec d'enregistrement pour le score %s après LLM bootstrap : %s",
+                    score.id, exc,
+                )
 
-    session.commit()
     logger.info(
         "%d appel(s) LLM sur un plafond de %d, dont %d ont produit un signal "
         "exploitable (%d échec(s), signal resté exclu).",

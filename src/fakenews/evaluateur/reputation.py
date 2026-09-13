@@ -21,10 +21,19 @@ FIABLE = {
 }
 
 DOUTEUX = {
+    # Sources anglophones
     "naturalnews.com",
     "beforeitsnews.com",
     "infowars.com",
     "worldnewsdailyreport.com",
+    # Sources francophones. Classement repris du Décodex (Le Monde), consulté le
+    # 2026-09-09 — la source est citée parce que ce dépôt est public et que
+    # `doc/V0/architecture.md` pose le risque de diffamation comme condition
+    # bloquante à l'ouverture publique : la liste doit être attribuable, pas nôtre.
+    "reseauinternational.net",
+    "francesoir.fr",
+    "lelibrepenseur.org",
+    "egaliteetreconciliation.fr",
 }
 
 VALEUR_FIABLE = 5.0

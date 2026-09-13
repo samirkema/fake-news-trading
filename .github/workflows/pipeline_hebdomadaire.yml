@@ -47,6 +47,12 @@ jobs:
           REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
           REDDIT_USER_AGENT: ${{ secrets.REDDIT_USER_AGENT }}
 
+      # Collecte des articles proposés par les utilisateurs et acceptés par un
+      # contributeur (US-04 crowdsourcing, cf. doc/V3/). AVANT l'évaluateur, pour
+      # qu'un article accepté soit noté dans le même run plutôt qu'au suivant.
+      # Aucun secret : ce step ne fait que des requêtes HTTP publiques.
+      - run: python -m fakenews.scraper.propositions
+
       # Évaluateur (US-08, US-01 réputation, US-03 fact-checking, US-04 source
       # primaire, US-05 style, US-07 LLM bootstrap — cf. doc/plan_implementation.md
       # "État d'avancement" pour les signaux restants).

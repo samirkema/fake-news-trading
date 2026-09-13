@@ -2,6 +2,9 @@ import httpx
 
 from fakenews.evaluateur.fact_checking import evaluer_fact_checking
 
+TITRE = "Tesla annonce des livraisons record au quatrième trimestre"
+TEXTE_CLAIM = "Tesla a annoncé des livraisons record au quatrième trimestre"
+
 
 def _client_factice(reponse_json=None, leve=None, contenu_brut=None):
     def handler(request):
@@ -23,15 +26,19 @@ def test_cle_absente_exclut_le_signal(monkeypatch):
 
 
 def test_verdict_faux_augmente_la_suspicion():
-    reponse = {"claims": [{"claimReview": [{"textualRating": "False", "url": "https://factcheck.example/1"}]}]}
-    resultat = evaluer_fact_checking("Titre", cle_api="clef-test", client=_client_factice(reponse))
+    # Les claims portent un `text` rattachable au titre : c'est la condition pour
+    # que leur verdict soit utilisé (audit phase 14, F1). Les fixtures précédentes
+    # l'omettaient toutes, empruntant sans le voir le chemin où le contrôle de
+    # pertinence était court-circuité.
+    reponse = {"claims": [{"text": TEXTE_CLAIM, "claimReview": [{"textualRating": "False", "url": "https://factcheck.example/1"}]}]}
+    resultat = evaluer_fact_checking(TITRE, cle_api="clef-test", client=_client_factice(reponse))
     assert resultat["valeur"] == 90.0
     assert resultat["preuve_id"] == "fact_checking:https://factcheck.example/1"
 
 
 def test_verdict_vrai_diminue_la_suspicion():
-    reponse = {"claims": [{"claimReview": [{"textualRating": "True", "url": "https://factcheck.example/2"}]}]}
-    resultat = evaluer_fact_checking("Titre", cle_api="clef-test", client=_client_factice(reponse))
+    reponse = {"claims": [{"text": TEXTE_CLAIM, "claimReview": [{"textualRating": "True", "url": "https://factcheck.example/2"}]}]}
+    resultat = evaluer_fact_checking(TITRE, cle_api="clef-test", client=_client_factice(reponse))
     assert resultat["valeur"] == 5.0
 
 
@@ -42,8 +49,8 @@ def test_aucune_correspondance_est_neutre():
 
 
 def test_verdict_ambigu_est_ignore():
-    reponse = {"claims": [{"claimReview": [{"textualRating": "Unproven", "url": "https://factcheck.example/3"}]}]}
-    resultat = evaluer_fact_checking("Titre", cle_api="clef-test", client=_client_factice(reponse))
+    reponse = {"claims": [{"text": TEXTE_CLAIM, "claimReview": [{"textualRating": "Unproven", "url": "https://factcheck.example/3"}]}]}
+    resultat = evaluer_fact_checking(TITRE, cle_api="clef-test", client=_client_factice(reponse))
     assert resultat["valeur"] is None
 
 

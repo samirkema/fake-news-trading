@@ -1,4 +1,4 @@
-from fakenews.scraper.normalisation import canonicaliser_url, hacher_contenu
+from fakenews.normalisation import canonicaliser_url, hacher_contenu
 
 
 def test_canonicaliser_url_retire_query_string():

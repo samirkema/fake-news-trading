@@ -37,15 +37,74 @@
 <h3>Mise en contexte</h3>
 {% if mise_en_contexte %}
 <p>{{ mise_en_contexte.explication }}</p>
-{% if mise_en_contexte.sources_utilisees %}
+{% if mise_en_contexte.faits_traces %}
+<h4>Faits vérifiés</h4>
 <ul>
-  {% for source in mise_en_contexte.sources_utilisees %}
-  <li>{{ source }}</li>
+  {% for fait in mise_en_contexte.faits_traces %}
+  <li>{{ fait.texte }} <small>({{ fait.preuve_id }})</small></li>
   {% endfor %}
 </ul>
+{% endif %}
+{% if mise_en_contexte.deductions_llm %}
+<h4>Déductions et hypothèses</h4>
+<ul>
+  {% for item in mise_en_contexte.deductions_llm %}
+  <li>{{ item.texte if item is mapping else item }}</li>
+  {% endfor %}
+</ul>
+{% endif %}
+{% if mise_en_contexte.sources_utilisees %}
+<p><strong>Sources utilisées :</strong> {{ mise_en_contexte.sources_utilisees | join(', ') }}</p>
 {% endif %}
 <p><em>Confiance : {{ mise_en_contexte.niveau_confiance or "non précisée" }}</em></p>
 {% else %}
 <p>Aucune mise en contexte n'a encore été générée pour cet article.</p>
 {% endif %}
+
+<hr>
+<section id="commentaires" class="commentaires">
+  <h3>Commentaires des lecteurs</h3>
+  {# US-08 : ce que disent les visiteurs et ce que dit le système ne doivent pas
+     se confondre. D'où la séparation visuelle, et cette phrase. #}
+  <p class="aide">
+    Ces commentaires sont écrits par les personnes qui consultent le site. Ils
+    n'entrent dans aucun calcul et ne modifient pas le score ci-dessus.
+  </p>
+
+  {% if erreur %}<p class="erreur" role="alert">{{ erreur }}</p>{% endif %}
+
+  {% if commentaires %}
+  <ul class="fil">
+    {% for c in commentaires %}
+    <li{% if c.retire_le %} class="retire"{% endif %}>
+      <p class="entete">
+        <strong>{{ c.pseudo }}</strong>
+        <small>{{ c.date_creation.strftime("%Y-%m-%d") }}</small>
+        {% if c.retire_le %}
+        <small>— retiré par {{ c.retire_par }} le {{ c.retire_le.strftime("%Y-%m-%d") }},
+          visible de vous seul</small>
+        {% endif %}
+      </p>
+      <p>{{ c.texte }}</p>
+      {% if peut_administrer and not c.retire_le %}
+      <form method="post" action="/commentaires/{{ c.id }}/retirer" class="enligne">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button type="submit">Retirer</button>
+      </form>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p>Aucun commentaire pour l'instant.</p>
+  {% endif %}
+
+  <form method="post" action="/articles/{{ article.id }}/commentaires" class="empile">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label for="texte">Ajouter un commentaire</label>
+    <textarea id="texte" name="texte" rows="4" required
+              maxlength="{{ longueur_max }}"></textarea>
+    <button type="submit">Publier</button>
+  </form>
+</section>
 {% endblock %}

@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Mon compte — Fake News Détection{% endblock %}
+{% block content %}
+<h2>Mon compte</h2>
+<p>Connecté en tant que <strong>{{ compte.pseudo }}</strong>.</p>
+
+{% if erreur %}<p class="erreur" role="alert">{{ erreur }}</p>{% endif %}
+{% if succes %}<p class="succes" role="status">{{ succes }}</p>{% endif %}
+
+{% if a_un_code %}
+<h3>Changer mon code personnel</h3>
+<p class="aide">
+  Le changement déconnecte toutes les sessions ouvertes avec ce pseudo — il faudra
+  se reconnecter avec le nouveau code.
+</p>
+<form method="post" action="/compte/code" class="empile">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label for="code-actuel">Code actuel</label>
+  <input type="password" id="code-actuel" name="code_actuel" required autocomplete="current-password">
+  <label for="nouveau-code">Nouveau code ({{ longueur_min }} caractères minimum)</label>
+  <input type="password" id="nouveau-code" name="nouveau_code" required
+         minlength="{{ longueur_min }}" autocomplete="new-password">
+  <label for="confirmation">Confirmer le nouveau code</label>
+  <input type="password" id="confirmation" name="confirmation" required
+         minlength="{{ longueur_min }}" autocomplete="new-password">
+  <button type="submit">Changer mon code</button>
+</form>
+{% else %}
+<p class="aide">
+  Ce compte se connecte avec le mot de passe partagé : il n'a pas de code
+  personnel à changer.
+</p>
+{% endif %}
+
+<h3>Mes propositions</h3>
+{% if propositions %}
+<table>
+  <thead><tr><th>Article proposé</th><th>Date</th><th>État</th></tr></thead>
+  <tbody>
+    {% for p in propositions %}
+    <tr>
+      <td><a href="{{ p.url }}" target="_blank" rel="noopener noreferrer">{{ p.url | truncate(70) }}</a></td>
+      <td>{{ p.date_proposition.strftime("%Y-%m-%d") }}</td>
+      <td>
+        {% if p.statut == "en_attente" %}en attente de décision
+        {% elif p.statut == "acceptee" %}acceptée — en attente d'analyse
+        {% elif p.statut == "refusee" %}refusée — {{ p.motif }}
+        {% elif p.statut == "collectee" %}<a href="/articles/{{ p.article_id }}">analysée</a>
+        {% else %}collecte impossible{% if p.motif %} — {{ p.motif }}{% endif %}
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>Vous n'avez encore proposé aucun article. <a href="/proposer">En proposer un</a>.</p>
+{% endif %}
+{% endblock %}

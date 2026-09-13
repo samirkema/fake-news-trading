@@ -131,6 +131,50 @@ Le contextualiseur ne tourne que sur les articles dont le score final (US-08) d�
 
 ---
 
+## Décision (V3, 2026-09-10) — Le frontend écrit les intentions humaines, jamais le verdict
+
+**Ce qui change :** la règle « le frontend ne fait aucune écriture sur le stockage
+partagé », posée plus haut et reprise par `userstories_frontend.md` US-04, ne
+survit pas au crowdsourcing (cf. `doc/V3/`). Proposer un article, décider de son
+entrée, commenter une analyse, changer son propre mot de passe : ce sont des
+écritures, et elles arrivent quand un humain le décide, pas quand un batch
+hebdomadaire s'exécute.
+
+**Ce qui la remplace — une frontière plus précise, pas une frontière en moins :**
+
+| Ce que le frontend écrit | Ce qu'il n'écrit jamais |
+|---|---|
+| `propositions`, `commentaires`, `comptes` | `articles`, `scores`, `mise_en_contexte` |
+| des **intentions humaines** | le **verdict du système** |
+
+Le pipeline reste le seul producteur d'articles, de scores et de mises en
+contexte. Une proposition acceptée n'est pas un article : c'est une autorisation
+d'entrée, que le pipeline honorera à son rythme en créant l'article par le même
+chemin que la collecte automatique.
+
+**Pourquoi cette ligne-là :**
+- Elle préserve ce que « lecture seule » protégeait réellement : qu'aucun clic ne
+  puisse fabriquer, modifier ou effacer un verdict. C'était la garantie utile ;
+  « aucune écriture » n'en était qu'une formulation commode tant que le frontend
+  n'avait rien à enregistrer.
+- Elle garde le découplage : les blocs continuent de communiquer par le stockage,
+  sans appel direct. Le frontend dépose une intention, le pipeline la relève.
+- **Elle maintient la collecte d'URL hors de la fonction serverless.** Aller
+  chercher une URL fournie par un utilisateur depuis le processus qui sert le site
+  en ferait un relais vers des ressources que lui seul peut atteindre. Le runner
+  GitHub Actions n'a rien d'intéressant à atteindre : c'est la mesure de sécurité,
+  pas une commodité d'organisation.
+
+**Conséquence sur les rôles :** `contributeur` reçoit une capacité que
+`spectateur` n'a pas, donc le rôle doit devenir opposable. Un contributeur a
+désormais un code personnel **imposé par contrainte de schéma**, exactement comme
+le superadmin — `doc/V1/comptes-3-roles.md` posait déjà cette condition comme
+préalable. Le mot de passe partagé, lui, cesse d'ouvrir une simple consultation :
+il ouvre un pouvoir d'écriture. Les garde-fous de `/login` doivent être
+réellement opposables avant la mise en service (cf. `doc/audit/`, phase 14).
+
+---
+
 ## Ce que cette architecture NE couvre pas (pour rappel)
 
 - Le fine-tuning du modèle maison et son intégration comme module `llm_bootstrap` alternatif — prévu mais pas détaillé ici, ni l'ajustement des poids US-08 qui pourrait en découler (cf. `userstories_évaluateur.md`, explicitement hors périmètre pour l'instant).

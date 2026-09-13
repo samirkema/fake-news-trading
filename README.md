@@ -33,6 +33,7 @@ Détails complets : [doc/V0/architecture.md](doc/V0/architecture.md) et [doc/V0/
 - **Évaluateur** : score composite + signaux réputation, fact-checking, source primaire, style, LLM bootstrap (Claude). Corroboration croisée et décalage viral restent à implémenter (nécessitent une brique de clustering commune).
 - **Contextualiseur** : déclenchement, génération réelle (Claude), validation des preuves et persistance en place.
 - **Frontend** : liste filtrable/paginée des articles suspects, détail des scores, mise en contexte.
+- **Crowdsourcing (V3, phases 1-2)** : tout compte connecté peut proposer un article ; les contributeurs disposent d'une file d'attente pour accepter ou refuser ; le superadmin nomme les contributeurs ; chacun gère son code personnel depuis son espace compte ; tout compte connecté peut commenter l'analyse d'un article, le superadmin pouvant retirer un commentaire sans l'effacer. Une proposition acceptée est collectée puis notée par le pipeline (`python -m fakenews.scraper.propositions`, branché avant l'évaluateur). ⚠️ **Le pipeline hebdomadaire restant en pause**, cela n'arrive qu'au déclenchement manuel du workflow — l'interface l'annonce telle quelle (« acceptée — en attente d'analyse », sans promettre d'échéance : l'article entre en file derrière le reliquat de l'évaluateur). Voir [doc/V3/](doc/V3/).
 - **Automatisation** : les trois premiers blocs sont orchestrés en un workflow GitHub Actions (`.github/workflows/pipeline_hebdomadaire.yml`). ⚠️ **Le déclenchement automatique est actuellement désactivé** (projet en pause : le `schedule` est commenté pour ne pas consommer la clé Anthropic). Le workflow ne tourne que sur déclenchement manuel — les données ne se rafraîchissent donc pas toutes seules.
 - **CI** : `.github/workflows/ci.yml` lance la suite de tests sur chaque push et chaque PR, contre un vrai Postgres avec les migrations appliquées, et échoue si un test est skippé.
 
@@ -41,7 +42,7 @@ Deux familles de tests jouent des rôles distincts, à ne pas confondre :
 | Fichier | Ce qu'il garde |
 |---|---|
 | `tests/test_correctifs_audit.py` | les correctifs d'audit **déjà passés** — anti-régression |
-| `tests/test_conformite_exigences.py` | les **critères d'acceptation** des user stories — un critère non tenu est un test rouge |
+| `tests/test_conformite_exigences.py` | une sélection de **critères d'acceptation critiques** (seuils configurables, plafonds, auth fail-closed) |
 | `tests/test_signaux_corpus_reel.py` + `tests/corpus/` | les signaux face à des **entrées réelles** (verdicts de fact-checkers, titres de presse, HTML de flux) |
 
 La troisième famille existe parce que les défauts les plus graves trouvés jusqu'ici étaient invisibles aux fixtures synthétiques : `"False"` et `"True"` passaient, c'est `"Inaccurate"` qui inversait le verdict.
@@ -71,8 +72,15 @@ Copier `.env.example` en `.env` et renseigner :
 - `FAKENEWS_MODE=local` — développement uniquement, désactive l'authentification du frontend. À ne jamais définir en hébergé
 - `FAKENEWS_PROXYS_DE_CONFIANCE` — nombre de proxys devant l'application, pour le plafond anti-bruteforce de `/login`. **`1` sur Vercel** ; non définie ailleurs tant que la topologie n'a pas été constatée (`X-Forwarded-For` est alors ignoré, ce qui est le défaut sûr)
 - `CONTEXTUALISEUR_SEUIL` — seuil de suspicion 0-100 (défaut `60`). **Lu par le contextualiseur ET par le frontend** : les régler différemment ferait lister des articles dont la mise en contexte n'a jamais été demandée. Une valeur hors bornes fait échouer le démarrage plutôt que de vider la liste en silence
+- `LLM_PLAFOND_EVALUATEUR` — appels LLM de l'évaluateur par run (défaut `50`)
+- `EVALUATEUR_PLAFOND_ARTICLES` — articles évalués par run (défaut `300`)
 - `LLM_PLAFOND_CONTEXTUALISEUR` — appels LLM du contextualiseur par run (défaut `20`), distinct de `LLM_PLAFOND_EVALUATEUR` : un appel d'explication coûte plus cher qu'un appel de scoring court
 - `LLM_PLAFOND_BACKFILL` — appels LLM des scripts de backfill (défaut `100`)
+- `PROPOSITIONS_MAX_PAR_JOUR` — propositions d'articles par compte sur 24 h (défaut `10`, V3 crowdsourcing)
+- `PROPOSITIONS_PLAFOND_COLLECTE` — propositions acceptées collectées par run (défaut `20`)
+- `COMMENTAIRES_MAX_PAR_JOUR` — commentaires par compte sur 24 h (défaut `20`)
+- `LLM_MODELE` — modèle Claude utilisé pour le scoring et la génération (défaut `claude-haiku-4-5-20251001`)
+- `SEC_EDGAR_USER_AGENT` — User-Agent déclaré pour l'API SEC EDGAR (`NomApp/1.0 (contact@example.com)`)
 
 Appliquer le schéma de base de données (migrations dans l'ordre) :
 
@@ -80,7 +88,16 @@ Appliquer le schéma de base de données (migrations dans l'ordre) :
 psql "$DATABASE_URL" -f supabase/migrations/0001_init_schema.sql
 psql "$DATABASE_URL" -f supabase/migrations/0002_comptes.sql
 psql "$DATABASE_URL" -f supabase/migrations/0003_scores_detail_calcul.sql
+psql "$DATABASE_URL" -f supabase/migrations/0004_comptes_role_privilegie.sql
+psql "$DATABASE_URL" -f supabase/migrations/0005_propositions.sql
+psql "$DATABASE_URL" -f supabase/migrations/0006_index_date_collecte.sql
+psql "$DATABASE_URL" -f supabase/migrations/0007_commentaires.sql
 ```
+
+Depuis la `0004`, **aucun rôle privilégié ne peut exister sans code personnel** :
+un `contributeur` décide quels articles entrent dans la base, ce pouvoir ne doit
+pas appartenir à quiconque connaît le mot de passe partagé. La migration pose un
+code aléatoire aux contributeurs déjà présents — ils en redemandent un.
 
 La migration `0002` crée le compte superadmin avec un code personnel **aléatoire et inconnu** : personne ne peut s'y connecter tant que le vrai code n'a pas été posé (la commande est en commentaire à la fin du fichier). C'est volontaire — un superadmin sans code personnel serait accessible avec le simple mot de passe partagé.
 
@@ -102,6 +119,7 @@ Sans `TEST_DATABASE_URL`, les tests purs tournent quand même et les tests contr
 export PYTHONPATH=src
 
 python -m fakenews.scraper.run_scraper          # RSS + Reddit
+python -m fakenews.scraper.propositions          # articles proposés et acceptés (V3)
 python -m fakenews.evaluateur.run_evaluateur     # calcule les scores manquants
 python -m fakenews.contextualiseur.run_contextualiseur  # sélectionne, génère (Claude) et persiste
 

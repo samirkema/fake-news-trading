@@ -1,6 +1,10 @@
 """US-08 évaluateur : agrégation des sous-scores US-01 à US-07 en un score composite
 final 0-100 (cf. doc/userstories_évaluateur.md, doc/architecture.md interface evaluer(article))."""
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 # `corroboration` et `decalage_viral` ne sont produits par aucun code aujourd'hui
 # (US-02 et US-06, bloqués sur la brique de clustering). Ils restent au barème :
 # US-08 fixe explicitement les sept poids de départ, et un signal absent de
@@ -18,22 +22,38 @@ POIDS_PAR_DEFAUT = {
 }
 
 
-def calculer_score_composite(sous_scores: dict, poids: dict = POIDS_PAR_DEFAUT) -> dict:
+def calculer_score_composite(sous_scores: dict, poids: dict | None = None) -> dict:
     """sous_scores: {signal: {"valeur": float | None, "raison": str, "preuve_id": str}}.
     Un signal exclu du calcul (neutre/non applicable) a valeur=None.
 
     Retourne {"score_final": float | None, "non_evaluable": bool, "detail": {...}} —
     detail trace la contribution (valeur, poids, exclu) de chaque signal, pour
     l'explicabilité déjà exigée signal par signal (US-08 évaluateur)."""
+    if poids is None:
+        poids = POIDS_PAR_DEFAUT
+
     detail = {}
     somme_ponderee = 0.0
     somme_poids = 0.0
 
     for signal, resultat in sous_scores.items():
         valeur = resultat.get("valeur")
-        poids_signal = poids.get(signal, 0.0)
-        if valeur is None:
-            detail[signal] = {"valeur": None, "poids": poids_signal, "exclu": True}
+        if signal not in poids:
+            logger.warning(
+                "Signal « %s » présent dans sous_scores mais hors barème — exclu du calcul.",
+                signal,
+            )
+            detail[signal] = {
+                "valeur": valeur,
+                "poids": 0.0,
+                "exclu": True,
+                "raison": "hors barème",
+            }
+            continue
+
+        poids_signal = poids[signal]
+        if valeur is None or poids_signal <= 0.0:
+            detail[signal] = {"valeur": valeur, "poids": poids_signal, "exclu": True}
             continue
         detail[signal] = {"valeur": valeur, "poids": poids_signal, "exclu": False}
         somme_ponderee += poids_signal * valeur

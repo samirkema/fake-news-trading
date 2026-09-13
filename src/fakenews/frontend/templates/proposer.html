@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Proposer un article — Fake News Détection{% endblock %}
+{% block content %}
+<h2>Proposer un article à analyser</h2>
+<p class="aide">
+  L'article proposé entre dans une file d'attente. Un contributeur décide s'il est
+  envoyé à l'analyse ; vous suivez son état depuis <a href="/compte">votre compte</a>.
+</p>
+
+{% if erreur %}<p class="erreur" role="alert">{{ erreur }}</p>{% endif %}
+{% if succes %}<p class="succes" role="status">Proposition enregistrée — elle attend la décision d'un contributeur.</p>{% endif %}
+{% if deja_analyse %}
+<p class="succes" role="status">
+  Cet article a déjà été analysé : <a href="/articles/{{ deja_analyse }}">voir sa fiche</a>.
+</p>
+{% endif %}
+
+<form method="post" action="/proposer" class="empile">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label for="url">Adresse de l'article</label>
+  <input type="url" id="url" name="url" required placeholder="https://…" autocomplete="off">
+  <label for="note">Pourquoi le trouvez-vous suspect ? (facultatif)</label>
+  <textarea id="note" name="note" rows="3" maxlength="1000"></textarea>
+  <button type="submit">Proposer</button>
+</form>
+{% endblock %}

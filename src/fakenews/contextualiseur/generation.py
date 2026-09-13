@@ -2,7 +2,10 @@
 l'évaluateur (cf. doc/userstories_contextualiseur.md). Réutilise validation.py (déjà
 construit sans LLM) pour appliquer le garde-fou preuve_id sur la sortie du modèle."""
 
-from fakenews.contextualiseur.validation import valider_faits_traces
+from fakenews.contextualiseur.validation import (
+    valider_faits_traces,
+    valider_formulation_prudente,
+)
 from fakenews.llm import (
     CONSIGNE_CONTENU_NON_FIABLE,
     appeler_structure,
@@ -61,11 +64,16 @@ SYSTEM = (
 
 
 def _formatter_signaux(sous_scores: dict) -> str:
-    lignes = [
-        f"- {nom} (preuve_id={resultat['preuve_id']}) : valeur={resultat['valeur']}, {resultat['raison']}"
-        for nom, resultat in sous_scores.items()
-        if resultat.get("valeur") is not None
-    ]
+    lignes = []
+    for nom, resultat in sous_scores.items():
+        if resultat.get("valeur") is not None:
+            # La raison peut contenir du texte d'origine tierce (textualRating d'éditeurs
+            # ClaimReview ou justifications libres) : elle est encadrée pour neutraliser
+            # toute tentative d'évasion de prompt (audit phase 12).
+            raison_securisee = encadrer_contenu_non_fiable(str(resultat.get("raison", "")))
+            lignes.append(
+                f"- {nom} (preuve_id={resultat['preuve_id']}) : valeur={resultat['valeur']}, {raison_securisee}"
+            )
     return "\n".join(lignes) if lignes else "(aucun signal exploitable pour cet article)"
 
 
@@ -73,8 +81,8 @@ def generer_mise_en_contexte(titre: str, contenu: str, sous_scores: dict, client
     """Retourne {"explication", "faits_traces", "deductions_llm", "sources_utilisees",
     "niveau_confiance"} — faits_traces déjà validés contre les preuve_id réels."""
     client = client or creer_client()
-    # Le contenu collecté est encadré ; les signaux, eux, viennent de l'évaluateur
-    # et restent hors du cadre — ce sont nos données, pas celles d'un tiers.
+    # Le contenu collecté ainsi que les justifications textuelles des signaux
+    # sont encadrés par <contenu_non_fiable> pour neutraliser toute injection.
     prompt = (
         "Article à mettre en contexte :\n"
         + encadrer_contenu_non_fiable(f"Titre : {titre}\n\nContenu (extrait) :\n{contenu[:2000]}")
@@ -82,6 +90,7 @@ def generer_mise_en_contexte(titre: str, contenu: str, sous_scores: dict, client
     )
     brut = appeler_structure(client, SYSTEM, prompt, SCHEMA, max_tokens=1500)
 
+    explication = valider_formulation_prudente(brut.get("explication", ""))
     valide = valider_faits_traces(
         {"faits_traces": brut.get("faits_traces", []), "deductions_llm": brut.get("deductions_llm", [])},
         sous_scores,
@@ -89,7 +98,7 @@ def generer_mise_en_contexte(titre: str, contenu: str, sous_scores: dict, client
     sources_utilisees = sorted({item["preuve_id"] for item in valide["faits_traces"]})
 
     return {
-        "explication": brut["explication"],
+        "explication": explication,
         "faits_traces": valide["faits_traces"],
         "deductions_llm": valide["deductions_llm"],
         "sources_utilisees": sources_utilisees,

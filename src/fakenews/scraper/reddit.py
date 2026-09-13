@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import praw
 from sqlalchemy.orm import Session
 
-from fakenews.scraper.normalisation import canonicaliser_url, hacher_contenu
+from fakenews.normalisation import canonicaliser_url, hacher_contenu
 from fakenews.scraper.persistance import enregistrer_ou_mettre_a_jour
 from fakenews.scraper.sources_reddit import NB_POSTS_PAR_SUBREDDIT, SUBREDDITS
 

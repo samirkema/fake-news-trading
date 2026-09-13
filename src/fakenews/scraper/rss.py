@@ -8,7 +8,7 @@ from html import unescape
 import feedparser
 from sqlalchemy.orm import Session
 
-from fakenews.scraper.normalisation import canonicaliser_url, hacher_contenu
+from fakenews.normalisation import canonicaliser_url, hacher_contenu
 from fakenews.scraper.persistance import enregistrer_ou_mettre_a_jour
 from fakenews.scraper.sources_rss import RSS_SOURCES
 
@@ -37,7 +37,10 @@ def _extraire_date_publication(entree) -> datetime | None:
 # On nettoie donc à la COLLECTE, une seule fois, plutôt que dans chacun des quatre
 # consommateurs.
 _BLOCS_INERTES = re.compile(r"<(script|style)\b[^>]*>.*?</\1\s*>", re.S | re.I)
-_BALISES = re.compile(r"<[^>]+>")
+# Balise, commentaire, déclaration (`<!DOCTYPE …>`) ou instruction de traitement
+# (`<?xml …?>`) — mais JAMAIS un « < » isolé : `<[^>]+>` détruisait 87 % du texte
+# d'un résumé contenant « a < b » (audit phase 11).
+_BALISES = re.compile(r"</?[a-zA-Z][^>]*>|<!--.*?-->|<![^>]*>|<\?.*?\?>", re.S)
 
 
 def nettoyer_html(brut: str) -> str:
@@ -59,15 +62,25 @@ def _extraire_contenu(entree) -> str:
 USER_AGENT = "Mozilla/5.0 (compatible; fakenews-scraper/0.1)"
 
 
-def _telecharger(url: str) -> bytes | None:
+# Plafond de lecture par défaut. Un flux RSS pèse quelques centaines de Ko ; sans
+# borne, une réponse démesurée — ou un serveur qui envoie indéfiniment — fait
+# gonfler la mémoire du runner. Le collecteur de propositions abaisse encore cette
+# valeur : ses URL viennent des utilisateurs (V3, US-04).
+TAILLE_MAX_PAR_DEFAUT = 10_000_000
+
+
+def _telecharger(url: str, taille_max: int = TAILLE_MAX_PAR_DEFAUT) -> bytes | None:
     """Récupère le contenu brut d'une URL avec un timeout explicite (cf. doc/architecture.md,
     "dégrader jamais bloquer" — un flux qui traîne ne doit pas geler tout le run). Un
     User-Agent explicite est nécessaire : plusieurs flux renvoient 403 sur le User-Agent
-    par défaut d'urllib."""
+    par défaut d'urllib.
+
+    La lecture est bornée : `read(n)` s'arrête à n octets quoi qu'annonce le
+    serveur. Un `Content-Length` mensonger ou absent ne change donc rien."""
     requete = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(requete, timeout=TIMEOUT_SECONDES) as reponse:
-            return reponse.read()
+            return reponse.read(taille_max)
     except Exception as exc:
         # `except Exception` volontaire : la liste fermée précédente
         # (URLError, TimeoutError, ConnectionError) laissait passer

@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Comptes — Fake News Détection{% endblock %}
+{% block content %}
+<h2>Comptes</h2>
+<p class="aide">
+  Un pseudo apparaît ici après sa première connexion réussie. Tant qu'un compte
+  n'a pas de code personnel, son pseudo n'est <strong>pas une identité
+  vérifiée</strong> : toute personne connaissant le mot de passe partagé peut
+  l'occuper. Ne promouvoir qu'après un échange hors ligne.
+</p>
+
+{% if erreur %}<p class="erreur" role="alert">{{ erreur }}</p>{% endif %}
+{% if code_provisoire %}
+<p class="succes" role="status">
+  <strong>{{ pseudo_promu }}</strong> est contributeur. Code provisoire à lui
+  transmettre — <strong>affiché une seule fois</strong>, il devra le changer
+  depuis son espace compte :
+  <br><code>{{ code_provisoire }}</code>
+</p>
+{% endif %}
+
+<table>
+  <thead><tr><th>Pseudo</th><th>Rôle</th><th>Code personnel</th><th>Action</th></tr></thead>
+  <tbody>
+    {% for c in comptes %}
+    <tr>
+      <td>{{ c.pseudo }}</td>
+      <td>{{ c.role }}</td>
+      <td>{% if c.secret_hash %}oui{% else %}<span class="exclu">mot de passe partagé</span>{% endif %}</td>
+      <td>
+        {% if c.role == "superadmin" %}
+        <span class="exclu">—</span>
+        {% elif c.role == "contributeur" %}
+        <form method="post" action="/admin/comptes/{{ c.id }}/retrograder" class="enligne">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button type="submit">Rétrograder</button>
+        </form>
+        {% else %}
+        <form method="post" action="/admin/comptes/{{ c.id }}/promouvoir" class="enligne">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button type="submit">Nommer contributeur</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

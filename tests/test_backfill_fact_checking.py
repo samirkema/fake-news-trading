@@ -53,7 +53,16 @@ def test_signal_exclu_par_cle_absente_est_retente(db_session, monkeypatch):
             "fact_checking": {"valeur": None, "raison": "clé API Google Fact Check absente", "preuve_id": "fact_checking"},
         },
     )
-    reponse = {"claims": [{"claimReview": [{"textualRating": "False", "url": "https://factcheck.example/1"}]}]}
+    # `text` rattachable au titre de l'article : sans lui le verdict est écarté
+    # comme non pertinent (audit phase 14, F1).
+    reponse = {
+        "claims": [
+            {
+                "text": "Titre cle-absente, une affirmation vérifiée par un fact-checker",
+                "claimReview": [{"textualRating": "False", "url": "https://factcheck.example/1"}],
+            }
+        ]
+    }
     client = _client_factice(reponse)
 
     nb = backfiller_fact_checking(db_session, client=client)

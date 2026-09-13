@@ -34,9 +34,28 @@ def mode_heberge(monkeypatch):
 @pytest.fixture(autouse=True)
 def _environnement_neutre(monkeypatch):
     """Aucun test n'hérite du mode d'un autre, ni de l'environnement de la machine
-    qui lance la suite."""
+    qui lance la suite, ni du cache d'authentification d'un autre — ce dernier est
+    un dict de module : sans purge, un compte lu avant sa création restait absent
+    60 s et faisait échouer un test qui passe seul (audit phase 13)."""
+    from fakenews.frontend.app import _cache_comptes
+
     monkeypatch.delenv("FRONTEND_PASSWORD", raising=False)
     monkeypatch.delenv("FAKENEWS_MODE", raising=False)
+    _cache_comptes.clear()
+
+
+@pytest.fixture(autouse=True)
+def _sans_ralentissement_login(monkeypatch):
+    """Neutralise le délai anti-bruteforce de `/login` pour la suite.
+
+    Le délai est réel (0,5 s par échec récent, 5 s au plafond) : les tests qui
+    martèlent `/login` — jusqu'à 50 tentatives — prendraient des minutes.
+
+    Le mécanisme lui-même est vérifié par deux tests dédiés qui rétablissent une
+    valeur non nulle (`test_correctifs_audit.py`, section phase 14). C'est le
+    seul endroit où il doit l'être : sans eux, cette fixture masquerait sa
+    disparition pure et simple."""
+    monkeypatch.setattr("fakenews.frontend.app.LOGIN_DELAI_PAR_ECHEC", 0.0)
 
 
 @pytest.fixture(autouse=True)
@@ -111,3 +130,8 @@ def db_session():
         session.close()
         transaction.rollback()
         connection.close()
+        # `dispose()` et pas seulement `close()` : chaque test crée son propre
+        # moteur, donc son propre pool. Sans libération, les connexions
+        # s'accumulent jusqu'au refus de Postgres (« sorry, too many clients
+        # already ») — constaté sur la suite complète, un test sauté au hasard.
+        engine.dispose()

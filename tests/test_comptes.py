@@ -28,23 +28,48 @@ def _requete(valeur_cookie=None):
 def test_pseudo_inconnu_est_spectateur(db_session, monkeypatch, mode_heberge):
     mode_heberge("secret")
     compte = compte_courant(_requete(_valeur_cookie("inconnu", "secret")), db_session)
-    assert compte == CompteCourant(pseudo="inconnu", role="spectateur")
+    # Comparaison champ par champ : `CompteCourant` porte aussi le jeton CSRF de
+    # la session (V3), qui dépend de l'expiration et n'est donc pas reproductible
+    # par une égalité de dataclass.
+    assert (compte.pseudo, compte.role) == ("inconnu", "spectateur")
+
+
+def _code(db_session, valeur):
+    """Un rôle privilégié ne peut plus exister sans code personnel : la migration
+    0004 étend au `contributeur` la contrainte qui ne visait que le superadmin
+    (V3, cf. doc/V3/userstories_crowdsourcing.md US-06). Ces tests portaient sur
+    un état que la base refuse désormais."""
+    return db_session.execute(select(func.crypt(valeur, func.gen_salt("bf")))).scalar_one()
 
 
 def test_pseudo_dans_comptes_prend_son_role(db_session, monkeypatch, mode_heberge):
     mode_heberge("secret")
-    db_session.add(Compte(pseudo="alice", role="contributeur"))
+    db_session.add(
+        Compte(pseudo="alice", role="contributeur", secret_hash=_code(db_session, "code-alice"))
+    )
     db_session.flush()
-    compte = compte_courant(_requete(_valeur_cookie("alice", "secret")), db_session)
+    secret_hash = db_session.execute(
+        select(Compte.secret_hash).where(func.lower(Compte.pseudo) == "alice")
+    ).scalar_one()
+    compte = compte_courant(
+        _requete(_valeur_cookie("alice", "secret", secret_hash)), db_session
+    )
     assert compte.role == "contributeur"
 
 
 def test_lookup_insensible_a_la_casse(db_session, monkeypatch, mode_heberge):
     mode_heberge("secret")
-    db_session.add(Compte(pseudo="Bob", role="contributeur"))
+    db_session.add(
+        Compte(pseudo="Bob", role="contributeur", secret_hash=_code(db_session, "code-bob"))
+    )
     db_session.flush()
     # le pseudo est normalisé en minuscules à la connexion -> "bob"
-    compte = compte_courant(_requete(_valeur_cookie("bob", "secret")), db_session)
+    secret_hash = db_session.execute(
+        select(Compte.secret_hash).where(func.lower(Compte.pseudo) == "bob")
+    ).scalar_one()
+    compte = compte_courant(
+        _requete(_valeur_cookie("bob", "secret", secret_hash)), db_session
+    )
     assert compte.role == "contributeur"
 
 
@@ -78,7 +103,7 @@ def test_mauvais_mot_de_passe_dans_la_signature_refuse(db_session, monkeypatch, 
 def test_mode_local_est_superadmin(db_session, monkeypatch):
     monkeypatch.setenv("FAKENEWS_MODE", "local")
     compte = compte_courant(_requete(), db_session)
-    assert compte == CompteCourant(pseudo="local", role="superadmin")
+    assert (compte.pseudo, compte.role) == ("local", "superadmin")
 
 
 def test_cookie_superadmin_lie_au_secret_hash(db_session, monkeypatch, mode_heberge):

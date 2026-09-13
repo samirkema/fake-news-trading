@@ -75,6 +75,14 @@ VERDICTS_NIES = [
     "Unconfirmed",
     "Unverified",
     "Not confirmed",
+    # Formes niées françaises (audit phase 11)
+    "Ce n'est pas vrai",
+    "Pas avéré",
+    "Ceci n'est pas exact",
+    "N'est pas confirmé",
+    "Pas vrai",
+    "Non avéré",
+    "Pas vérifié",
 ]
 
 
@@ -117,6 +125,11 @@ TITRES_EN = [
     "New study links coffee to longer life",
     "Boeing faces lawsuit over safety concerns",
     "Oil prices surge after supply disruption",
+    # Titres anglais contenant un nom propre ou marque portant un accent (audit phase 11)
+    "Beyoncé announces world tour dates",
+    "Nestlé recalls frozen pizza batch",
+    "Pokémon Go maker reports record revenue",
+    "Chloé Zhao wins best director",
 ]
 
 
@@ -151,6 +164,14 @@ RESUMES_RSS_HTML = [
         '<style>.byline { font-size: "12px"; }</style><p>The company declined to '
         "comment.</p>",
         "The company declined to comment.",
+    ),
+    (
+        "<p>Le seuil a < b reste valable et la marge < 3 % est confirmée.</p>",
+        "Le seuil a < b reste valable et la marge < 3 % est confirmée.",
+    ),
+    (
+        "<p>Bénéfice > 5 % et perte < 2 % selon le rapport.</p>",
+        "Bénéfice > 5 % et perte < 2 % selon le rapport.",
     ),
 ]
 

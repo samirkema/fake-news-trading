@@ -70,17 +70,24 @@ def backfiller_fact_checking(session: Session, client: httpx.Client | None = Non
                 score.detail_calcul = recalcul["detail"]
                 score.score_final = recalcul["score_final"]
                 score.non_evaluable = recalcul["non_evaluable"]
-                nb_traites += 1
-                # Clé absente, API indisponible ou aucune correspondance : le signal
-                # est réécrit mais reste exclu. Les compter comme « valides » faisait
-                # annoncer un rattrapage réussi après N échecs (cf. audit phase 10).
-                if resultat.get("valeur") is not None:
-                    nb_valides += 1
+                try:
+                    session.commit()
+                    nb_traites += 1
+                    # Clé absente, API indisponible ou aucune correspondance : le signal
+                    # est réécrit mais reste exclu. Les compter comme « valides » faisait
+                    # annoncer un rattrapage réussi après N échecs (cf. audit phase 10).
+                    if resultat.get("valeur") is not None:
+                        nb_valides += 1
+                except Exception as exc:
+                    session.rollback()
+                    logger.error(
+                        "Échec d'enregistrement pour le score %s après fact-checking : %s",
+                        score.id, exc,
+                    )
     finally:
         if ferme_client:
             client.close()
 
-    session.commit()
     logger.info(
         "%d score(s) réévalué(s), dont %d ont produit un signal fact_checking "
         "exploitable (%d sans correspondance ou en échec, signal resté exclu).",

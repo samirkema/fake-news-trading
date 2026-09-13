@@ -15,10 +15,38 @@
     form.filtres { display: flex; gap: 1rem; flex-wrap: wrap; align-items: end; margin-bottom: 1rem; }
     form.filtres label { display: flex; flex-direction: column; font-size: 0.85rem; gap: 0.25rem; }
     a { color: #1a56db; }
+    nav { display: flex; gap: 1rem; flex-wrap: wrap; font-size: 0.9rem; margin-bottom: 1rem; }
+    .erreur { color: #b91c1c; background: #fef2f2; border: 1px solid #fecaca; padding: 0.5rem 0.75rem; border-radius: 6px; }
+    .succes { color: #14532d; background: #f0fdf4; border: 1px solid #bbf7d0; padding: 0.5rem 0.75rem; border-radius: 6px; }
+    .aide { font-size: 0.9rem; color: #52525b; }
+    form.empile { display: flex; flex-direction: column; gap: 0.4rem; max-width: 32rem; margin-bottom: 1.5rem; }
+    form.empile input, form.empile textarea { padding: 0.5rem; font: inherit; border: 1px solid #ccc; border-radius: 6px; }
+    form.empile label { font-size: 0.85rem; }
+    form.enligne { display: inline-flex; gap: 0.25rem; margin: 0 0 0.25rem 0; }
+    form.enligne input { padding: 0.3rem; font-size: 0.85rem; border: 1px solid #ccc; border-radius: 4px; }
+    button { padding: 0.4rem 0.7rem; font-size: 0.9rem; border: none; border-radius: 6px; background: #1a56db; color: white; cursor: pointer; }
+    button:hover { background: #143f9e; }
+    code { background: #f4f4f5; padding: 0.15rem 0.35rem; border-radius: 4px; }
+    .commentaires ul.fil { list-style: none; padding: 0; }
+    .commentaires ul.fil li { border-left: 3px solid #e4e4e7; padding: 0.25rem 0 0.25rem 0.75rem; margin-bottom: 1rem; }
+    .commentaires .entete { margin: 0 0 0.25rem 0; font-size: 0.85rem; color: #52525b; }
+    .commentaires li.retire { opacity: 0.6; border-left-color: #fca5a5; }
+    .visuellement-cache { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   </style>
 </head>
 <body>
   <h1><a href="/">Fake News — Détection</a></h1>
+  {# Le rôle n'est jamais écrit à l'écran ; il se manifeste par les accès offerts
+     (cf. doc/V3/userstories_crowdsourcing.md, tableau des contrats modifiés). #}
+  {% if compte %}
+  <nav aria-label="Navigation principale">
+    <a href="/">Articles</a>
+    <a href="/proposer">Proposer un article</a>
+    <a href="/compte">Mon compte</a>
+    {% if peut_decider %}<a href="/file">File d'attente</a>{% endif %}
+    {% if peut_administrer %}<a href="/admin/comptes">Comptes</a>{% endif %}
+  </nav>
+  {% endif %}
   <div class="avertissement">{{ avertissement }}</div>
   {% block content %}{% endblock %}
 </body>
