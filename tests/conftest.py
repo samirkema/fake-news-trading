@@ -135,3 +135,13 @@ def db_session():
         # s'accumulent jusqu'au refus de Postgres (« sorry, too many clients
         # already ») — constaté sur la suite complète, un test sauté au hasard.
         engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def _budget_llm_neutre(monkeypatch):
+    """Les tests n'ont pas de base `usage_llm` : le plafond mensuel est neutralisé
+    sauf pour tests/test_budget_llm.py, qui teste le vrai module."""
+    from fakenews import budget_llm
+
+    monkeypatch.setattr(budget_llm, "verifier_budget", lambda: None)
+    monkeypatch.setattr(budget_llm, "enregistrer_usage", lambda *a, **k: None)

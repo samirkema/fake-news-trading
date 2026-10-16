@@ -8,6 +8,8 @@ import re
 
 import anthropic
 
+from fakenews import budget_llm
+
 # Haiku par défaut pour les deux usages (scoring court, génération plus longue) —
 # budget serré du projet (cf. doc/fiche-projet-fake-news-trading.md). Surchageable
 # via LLM_MODELE si un besoin de qualité supérieure apparaît pour la génération.
@@ -59,7 +61,11 @@ def appeler_structure(
     max_tokens: int = 1024,
 ) -> dict:
     """Force une réponse structurée via un tool call plutôt que de parser du texte
-    libre — évite les erreurs de parsing sur une réponse mal formée."""
+    libre — évite les erreurs de parsing sur une réponse mal formée.
+
+    Soumis au plafond mensuel (cf. fakenews.budget_llm) : lève `BudgetLLMEpuise`
+    avant l'appel si le budget du mois est atteint."""
+    budget_llm.verifier_budget()
     reponse = client.messages.create(
         model=model,
         max_tokens=max_tokens,
@@ -73,6 +79,12 @@ def appeler_structure(
             }
         ],
         tool_choice={"type": "tool", "name": "repondre"},
+    )
+    usage = getattr(reponse, "usage", None)
+    budget_llm.enregistrer_usage(
+        model,
+        getattr(usage, "input_tokens", 0) or 0,
+        getattr(usage, "output_tokens", 0) or 0,
     )
     for bloc in reponse.content:
         if bloc.type == "tool_use":
