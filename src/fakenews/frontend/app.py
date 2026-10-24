@@ -66,7 +66,7 @@ logger = logging.getLogger(__name__)
 # de l'authentification une « condition bloquante », trois URL publiques décrivant
 # les routes, leurs paramètres et le formulaire de connexion sont une surface
 # offerte pour rien — le frontend n'a aucun consommateur d'API.
-app = FastAPI(title="Fake News — Détection", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="fakenewstrackingbase", docs_url=None, redoc_url=None, openapi_url=None)
 
 
 @app.middleware("http")
